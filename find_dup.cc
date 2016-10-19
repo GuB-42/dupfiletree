@@ -6,7 +6,11 @@
 #include <fstream>
 #include <sstream>
 
+#include "skiplist.h"
+#include "mempool.h"
+
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 bool        option_equal = false;
@@ -15,13 +19,34 @@ bool        option_child_groups = false;
 bool        option_zero = false;
 std::string option_format("5s");
 
-struct Node {
-	Node(std::string n) :
-		name(n), size(0), parent(NULL), child(NULL), child_count(0),
-		sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false),
-		vnode(n.find("%%%%") != std::string::npos) {};
+MemPool<char> string_pool;
 
-	std::string         name;
+struct Node;
+struct NodePoolAlloc {
+	static void *operator new(size_t size) {
+		++count;
+		return pool.alloc(size);
+	}
+	static void operator delete(void *) {
+		--count;
+		if (!count) pool.clear();
+	}
+	static MemPool<Node> pool;
+	static size_t count;
+};
+MemPool<Node> NodePoolAlloc::pool;
+size_t NodePoolAlloc::count;
+
+struct Node : public NodePoolAlloc {
+	explicit Node(std::string n) :
+		size(0), parent(NULL), child(NULL), child_count(0),
+		sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false),
+		vnode(n.find("%%%%") != std::string::npos) {
+		name = string_pool.alloc(n.size() + 1);
+		memcpy(name, n.c_str(), n.size() + 1);
+	};
+
+	char                *name;
 	unsigned long long  size;
 	Node                *parent;
 	Node                *child;
@@ -40,38 +65,41 @@ struct Node {
 		Node *cur_node = this;
 		for (size_t pos = 0; pos != std::string::npos; ) {
 			size_t slash_pos = path.find('/', pos);
-			std::string name;
+			std::string new_name;
 			if (slash_pos == std::string::npos) {
-				name = path.substr(pos);
+				new_name = path.substr(pos);
 				pos = std::string::npos;
 			} else {
-				name = path.substr(pos, slash_pos - pos);
+				new_name = path.substr(pos, slash_pos - pos);
 				pos = slash_pos + 1;
 			}
 
-			Node *p;
+			Node *p = NULL;
 			if (cur_node->child) {
 				p = cur_node->child;
-				if (p->name != name) {
+				if (p->name != new_name) {
 					p = p->sibling;
 					while (p != cur_node->child) {
-						if (p->name == name) break;
+						if (p->name == new_name) break;
 						p = p->sibling;
 					}
-					if (p == cur_node->child) {
-						p = new Node(name);
-						p->parent = cur_node;
-						p->sibling = cur_node->child->sibling;
-						cur_node->child->sibling = p;
-						new_node = true;
-					}
+					if (p == cur_node->child) p = NULL;
 				}
-			} else {
-				p = new Node(name);
+			}
+
+			if (!p) {
+				p = new Node(new_name);
 				p->parent = cur_node;
-				p->sibling = p;
+				if (cur_node->child) {
+					p->sibling = cur_node->child->sibling;
+					cur_node->child->sibling = p;
+				} else {
+					p->sibling = p;
+				}
+				p->vnode = (new_name.find("%%%%") != std::string::npos);
 				new_node = true;
 			}
+
 			cur_node->child = p;
 			cur_node = p;
 		}
@@ -91,9 +119,9 @@ struct Node {
 
 		for (const Node *p = this; p; p = p->parent) {
 			if (res.empty()) {
-				res = p->name + (p->slave ? "" : "");
+				res = std::string(p->name);
 			} else {
-				res = p->name + (p->slave ? "" : "") + '/' + res;
+				res = std::string(p->name) + '/' + res;
 			}
 		}
 		return res;
@@ -261,7 +289,7 @@ struct Node {
 				if (!p2->parent) continue;
 				Node *p2_parent = p2->parent;
 				while (p2_parent->dupe &&
-						 p2_parent->dupe == p2_parent->parent) {
+				       p2_parent->dupe == p2_parent->parent) {
 					p2_parent = p2_parent->dupe;
 				}
 				if (!p2_parent) continue;
@@ -275,7 +303,7 @@ struct Node {
 
 		bool group_has_slaves = false;
 		for (std::map<Node *, IdElt>::const_iterator it = id_map.begin();
-			 it != id_map.end(); ++it) {
+		     it != id_map.end(); ++it) {
 			bool master_node = false;
 			bool slave_node = false;
 
@@ -405,12 +433,11 @@ struct Node {
 
 		bool all_parent = false;
 		if (!option_child_groups) {
-         std::set<Node *> parent_group;
-         std::set<Node *> parents;
+			std::set<Node *> parent_group;
 			bool parent_group_init = true;
 			for (std::set<Node *>::const_iterator it =
 			     cur_group.begin(); it != cur_group.end(); ++it) {
-            if ((*it)->dupe) continue;
+				if ((*it)->dupe) continue;
 				all_parent = false;
 				if (!(*it)->parent) break;
 				if (!(*it)->parent->group) break;
@@ -418,22 +445,22 @@ struct Node {
 				if (parent_group_init) {
 					bool first = true;
 					for (Node *p = (*it)->parent; first || p != (*it)->parent;
-						  p = p->group, first = false) {
+					     p = p->group, first = false) {
 						parent_group.insert(p);
 					}
 					parent_group_init = false;
 				} else {
 					if (parent_group.find((*it)->parent) == parent_group.end()) break;
-               all_parent = true;
-   			}
-   		}
+					all_parent = true;
+				}
+			}
 		}
 
 		if (!all_parent) {
 			unsigned long long total_size = 0;
 			unsigned long long master_size = 0;
 			for (std::set<Node *>::const_iterator it =
-				 cur_group.begin(); it != cur_group.end(); ++it) {
+			     cur_group.begin(); it != cur_group.end(); ++it) {
 				total_size += (*it)->size;
 				if (!(*it)->slave) master_size = (*it)->size;
 			}
@@ -449,13 +476,53 @@ struct Node {
 			cur_group.insert(std::pair<unsigned long long, const Node *>(p->size, p));
 		}
 		for (std::map<unsigned long long, const Node *>::const_reverse_iterator it =
-			 cur_group.rbegin(); it != cur_group.rend(); ++it) {
+		     cur_group.rbegin(); it != cur_group.rend(); ++it) {
 			std::cout << (it->second->slave ? " S " : " M ") <<
 				it->second->size << " " << it->second->get_path() << std::endl;
 		}
 		std::cout << std::endl;
 	}
+
+	void clear_children() {
+		while (child) {
+			Node *t = child;
+			child = t->sibling;
+			delete t;
+		}
+	}
 };
+
+struct HashElt;
+struct HashPoolAlloc {
+	static void *operator new(size_t size) {
+		++count;
+		return pool.alloc(size);
+	}
+	static void operator delete(void *) {
+		--count;
+		if (!count) pool.clear();
+	}
+	static MemPool<HashElt> pool;
+	static size_t count;
+};
+MemPool<HashElt> HashPoolAlloc::pool;
+size_t HashPoolAlloc::count = 0;
+
+const size_t HASH_SIZE = 16;
+struct HashElt : public HashPoolAlloc {
+	Node *node;
+	unsigned char hash[HASH_SIZE];
+
+	int cmp(const HashElt &o) const {
+		return memcmp(hash, o.hash, HASH_SIZE);
+	}
+	void merge(const HashElt &o) {
+		node->group = o.node->group;
+		o.node->group = node;
+	}
+};
+
+SkipList<HashElt> hash_skip_list;
 
 static std::string to_human_str(unsigned long long v)
 {
@@ -507,22 +574,23 @@ int main(int argc, char* argv[])
 			break;
 		case 'h':
 		default:
-			std::cerr << "Usage: " << argv[0] << " [-ectz] [-f (5cs)] file" << std::endl;
+			std::cerr << "Usage: " << argv[0] << " [-ectz] [-f (5s)] file" << std::endl;
 			exit(EXIT_FAILURE);
 		}
 	}
 
-	std::map<std::string, Node *> hashes;
 	Node root_node(".");
+
 	std::multimap<unsigned long long, Node *> group_list;
 
 	std::cout << "building tree" << std::endl;
+
 	for (int i = 1; i < argc; ++i) {
 		std::ifstream infile;
 		infile.open(argv[i]);
 		for (std::string line; std::getline(infile, line); ) {
 			try {
-				std::string f_md5, f_crc, f_size, f_path;
+				std::string f_md5, f_size, f_path;
 				size_t pos = 0;
 				size_t pos2 = 0;
 
@@ -534,9 +602,6 @@ int main(int argc, char* argv[])
 					switch (option_format[j]) {
 					case '5':
 						f_md5 = line.substr(pos, pos2 - pos);
-						break;
-					case 'c':
-						f_crc = line.substr(pos, pos2 - pos);
 						break;
 					case 's':
 						f_size = line.substr(pos, pos2 - pos);
@@ -557,23 +622,40 @@ int main(int argc, char* argv[])
 					Node *node = root_node.insert_node(f_path, size);
 
 					if (!node->group && f_md5.length() == 32 &&
-						 f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
-						std::map<std::string, Node *>::iterator hashes_it = hashes.find(f_md5);
-						if (hashes_it == hashes.end()) {
-							hashes[f_md5] = node;
-							node->group = node;
-						} else {
-							node->group = hashes_it->second->group;
-							hashes_it->second->group = node;
+					    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
+						unsigned char hash[HASH_SIZE];
+						for (unsigned i = 0; i < HASH_SIZE * 2; ++i) {
+							unsigned char v = 0;
+							if (i < f_md5.size()) {
+								if (f_md5[i] >= '0' && f_md5[i] <= '9') {
+									v = f_md5[i] - '0';
+								} else if (f_md5[i] >= 'a' && f_md5[i] <= 'f') {
+									v = f_md5[i] - 'a' + 10;
+								} else if (f_md5[i] >= 'A' && f_md5[i] <= 'F') {
+									v = f_md5[i] - 'A' + 10;
+								}
+							}
+							if (i & 1) {
+								hash[((i + HASH_SIZE) >> 1) % HASH_SIZE] |= v;
+							} else {
+								hash[((i + HASH_SIZE) >> 1) % HASH_SIZE] = v << 4;
+							}
 						}
+
+						HashElt hash_elt;
+						hash_elt.node = node;
+						memcpy(hash_elt.hash, hash, HASH_SIZE);
+						//printf("insert %s\n", node->name);
+						hash_skip_list.insert(hash_elt);
 					}
 				}
 			} catch (const char *s) {
-				std::cout << s << std::endl;
+				std::cout << s << " : " << line << std::endl;
 			}
 		}
 		infile.close();
 	}
+	hash_skip_list.clear();
 
 	std::cout << "breaking cycles" << std::endl;
 	root_node.break_sibling_cycles();
@@ -604,4 +686,8 @@ int main(int argc, char* argv[])
 			" (" << to_human_str(it->first) <<  ")" << std::endl;
 		it->second->print_group();
 	}
+
+	group_list.clear();
+	root_node.clear_children();
+	string_pool.clear();
 }

@@ -222,8 +222,8 @@ int do_xmd5(const char *filename)
 #ifndef NO_ARCHIVES
 #ifdef DO_FORK
 			pid_t pid;
-         fflush(stdout);
-         fflush(stderr);
+			fflush(stdout);
+			fflush(stderr);
 			pid = fork();
 			if (pid == 0) {
 				do_xmd5_archive(filename);

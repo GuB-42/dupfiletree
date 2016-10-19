@@ -25,7 +25,7 @@ find_dup: find_dup.o
 
 xmd5.o: xmd5.c
 	$(CC) $(CFLAGS) -I$(LIBARCHIVE_PREFIX)/include -DDO_FORK -o $@ -c $<
-find_dup.o: find_dup.cc
+find_dup.o: find_dup.cc skiplist.h mempool.h
 	$(CXX) $(CXXFLAGS) -o $@ -c $<
 
 .PHONY: all re clean fclean

@@ -104,6 +104,53 @@ static std::string to_human_str(unsigned long long v)
 	return "?";
 }
 
+void read_file(Node *root_node, std::istream *infile)
+{
+	for (std::string line; std::getline(*infile, line); ) {
+		try {
+			std::string f_md5, f_size, f_path;
+			size_t pos = 0;
+			size_t pos2 = 0;
+
+			for (size_t j = 0; j < option_format.length(); ++j) {
+				pos = line.find_first_not_of(' ', pos2);
+				if (pos == std::string::npos) throw "parse error";
+				pos2 = line.find_first_of(' ', pos);
+				if (pos2 == std::string::npos) throw "parse error";
+				switch (option_format[j]) {
+				case '5':
+					f_md5 = line.substr(pos, pos2 - pos);
+					break;
+				case 's':
+					f_size = line.substr(pos, pos2 - pos);
+					break;
+				}
+			}
+			pos = line.find_first_not_of(' ', pos2);
+			if (pos == std::string::npos) throw "parse error";
+			f_path = line.substr(pos);
+
+			unsigned long long size = 0;
+			if (f_size.find_first_not_of("0123456789") == std::string::npos) {
+				size = strtoull(f_size.c_str(), NULL, 10);
+			}
+
+			if (option_zero ||
+			    size != 0 || f_md5 != "d41d8cd98f00b204e9800998ecf8427e") {
+				Node *node = root_node->insert_node(f_path, size);
+
+				if (!node->group && f_md5.length() == 32 &&
+				    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
+					HashElt hash_elt(node, f_md5);
+					hash_skip_list.insert(hash_elt);
+				}
+			}
+		} catch (const char *s) {
+			std::cout << s << " : " << line << std::endl;
+		}
+	}
+}
+
 int main(int argc, char* argv[])
 {
 	int opt;
@@ -137,54 +184,15 @@ int main(int argc, char* argv[])
 	std::multimap<unsigned long long, Node *> group_list;
 
 	std::cout << "building tree" << std::endl;
-
-	for (int i = 1; i < argc; ++i) {
-		std::ifstream infile;
-		infile.open(argv[i]);
-		for (std::string line; std::getline(infile, line); ) {
-			try {
-				std::string f_md5, f_size, f_path;
-				size_t pos = 0;
-				size_t pos2 = 0;
-
-				for (size_t j = 0; j < option_format.length(); ++j) {
-					pos = line.find_first_not_of(' ', pos2);
-					if (pos == std::string::npos) throw "parse error";
-					pos2 = line.find_first_of(' ', pos);
-					if (pos2 == std::string::npos) throw "parse error";
-					switch (option_format[j]) {
-					case '5':
-						f_md5 = line.substr(pos, pos2 - pos);
-						break;
-					case 's':
-						f_size = line.substr(pos, pos2 - pos);
-						break;
-					}
-				}
-				pos = line.find_first_not_of(' ', pos2);
-				if (pos == std::string::npos) throw "parse error";
-				f_path = line.substr(pos);
-
-				unsigned long long size = 0;
-				if (f_size.find_first_not_of("0123456789") == std::string::npos) {
-					size = strtoull(f_size.c_str(), NULL, 10);
-				}
-
-				if (option_zero ||
-				    size != 0 || f_md5 != "d41d8cd98f00b204e9800998ecf8427e") {
-					Node *node = root_node->insert_node(f_path, size);
-
-					if (!node->group && f_md5.length() == 32 &&
-					    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
-						HashElt hash_elt(node, f_md5);
-						hash_skip_list.insert(hash_elt);
-					}
-				}
-			} catch (const char *s) {
-				std::cout << s << " : " << line << std::endl;
-			}
+	if (argc > 1) {
+		for (int i = 1; i < argc; ++i) {
+			std::ifstream infile;
+			infile.open(argv[i]);
+			read_file(root_node, &infile);
+			infile.close();
 		}
-		infile.close();
+	} else {
+		read_file(root_node, &std::cin);
 	}
 	hash_skip_list.clear();
 

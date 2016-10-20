@@ -508,17 +508,50 @@ struct HashPoolAlloc {
 MemPool<HashElt> HashPoolAlloc::pool;
 size_t HashPoolAlloc::count = 0;
 
-const size_t HASH_SIZE = 16;
 struct HashElt : public HashPoolAlloc {
+	static const size_t HASH_SIZE = 16;
+
 	Node *node;
 	unsigned char hash[HASH_SIZE];
+
+	HashElt(Node *n, std::string md5_str) : node(n) {
+		set_hash(md5_str);
+		node->group = node;
+	}
+
+	void set_hash(std::string md5_str) {
+		unsigned hash_idx = 0;
+		bool high = true;
+		memset(hash, 0, HASH_SIZE);
+		for (unsigned i = 0; i < md5_str.size(); ++i) {
+			unsigned char v;
+			if (md5_str[i] >= '0' && md5_str[i] <= '9') {
+				v = md5_str[i] - '0';
+			} else if (md5_str[i] >= 'a' && md5_str[i] <= 'f') {
+				v = md5_str[i] - 'a' + 10;
+			} else if (md5_str[i] >= 'A' && md5_str[i] <= 'F') {
+				v = md5_str[i] - 'A' + 10;
+			} else {
+				continue;
+			}
+			if (high) {
+				hash[hash_idx] = v << 4;
+			} else {
+				hash[hash_idx++] |= v;
+			}
+			high = !high;
+			if (hash_idx >= HASH_SIZE) break;
+		}
+	}
 
 	int cmp(const HashElt &o) const {
 		return memcmp(hash, o.hash, HASH_SIZE);
 	}
+
 	void merge(const HashElt &o) {
+		Node *t = node->group;
 		node->group = o.node->group;
-		o.node->group = node;
+		o.node->group = t;
 	}
 };
 
@@ -623,29 +656,7 @@ int main(int argc, char* argv[])
 
 					if (!node->group && f_md5.length() == 32 &&
 					    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
-						unsigned char hash[HASH_SIZE];
-						for (unsigned i = 0; i < HASH_SIZE * 2; ++i) {
-							unsigned char v = 0;
-							if (i < f_md5.size()) {
-								if (f_md5[i] >= '0' && f_md5[i] <= '9') {
-									v = f_md5[i] - '0';
-								} else if (f_md5[i] >= 'a' && f_md5[i] <= 'f') {
-									v = f_md5[i] - 'a' + 10;
-								} else if (f_md5[i] >= 'A' && f_md5[i] <= 'F') {
-									v = f_md5[i] - 'A' + 10;
-								}
-							}
-							if (i & 1) {
-								hash[((i + HASH_SIZE) >> 1) % HASH_SIZE] |= v;
-							} else {
-								hash[((i + HASH_SIZE) >> 1) % HASH_SIZE] = v << 4;
-							}
-						}
-
-						HashElt hash_elt;
-						hash_elt.node = node;
-						memcpy(hash_elt.hash, hash, HASH_SIZE);
-						//printf("insert %s\n", node->name);
+						HashElt hash_elt(node, f_md5);
 						hash_skip_list.insert(hash_elt);
 					}
 				}

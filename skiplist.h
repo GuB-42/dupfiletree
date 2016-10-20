@@ -5,6 +5,10 @@
 
 template <class T, unsigned NB_LEVELS = 32, unsigned PROB = 2> class SkipList {
 	struct SkipListElt : public T {
+		// cppcheck-suppress uninitMemberVar
+		explicit SkipListElt(const T &o) : T(o) {
+		}
+
 		template <typename C, C> struct TypeCheck;
 		template <typename C>
 		static void *do_new(size_t size, TypeCheck<void *(*)(size_t), &C::operator new> *) {
@@ -25,7 +29,7 @@ public:
 	SkipList() : max_level(0) {
 	}
 
-	T* insert(const T &elt) {
+	T* insert(const T &elt, bool *is_new = NULL) {
 		SkipListElt **pp[NB_LEVELS];
 
 		unsigned level = max_level;
@@ -42,6 +46,7 @@ public:
 				int cmp = (*pp[level])->cmp(elt);
 				if (cmp == 0) {
 					(*pp[level])->merge(elt);
+					if (is_new) *is_new = false;
 					return *pp[level];
 				} else if (cmp > 0) {
 					break;
@@ -57,7 +62,7 @@ public:
 			++new_level;
 		}
 
-		SkipListElt *new_elt = new(new_level) SkipListElt;
+		SkipListElt *new_elt = new(new_level) SkipListElt(elt);
 		for (level = 0; level < new_level; ++level) {
 			if (new_level < max_level) {
 				new_elt->next[level] = *pp[level];
@@ -65,8 +70,10 @@ public:
 			} else {
 				new_elt->next[level] = NULL;
 				root[level] = new_elt;
+				max_level = level + 1;
 			}
 		}
+		if (is_new) *is_new = false;
 		return new_elt;
 	}
 

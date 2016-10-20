@@ -20,12 +20,14 @@ fclean: clean
 xmd5: xmd5.o
 	$(CC) -o $@ $(LDFLAGS) -lz -lbz2 -llzma -lcrypto -lxml2 xmd5.o $(LIBARCHIVE_PREFIX)/lib/libarchive.a
 
-find_dup: find_dup.o
-	$(CXX) -o $@ $(LDFLAGS) find_dup.o $(LIBS_FIND_FUP)
+find_dup: find_dup.o node.o
+	$(CXX) -o $@ $(LDFLAGS) find_dup.o node.o
 
 xmd5.o: xmd5.c
 	$(CC) $(CFLAGS) -I$(LIBARCHIVE_PREFIX)/include -DDO_FORK -o $@ -c $<
 find_dup.o: find_dup.cc skiplist.h mempool.h
+	$(CXX) $(CXXFLAGS) -o $@ -c $<
+node.o: node.cc mempool.h
 	$(CXX) $(CXXFLAGS) -o $@ -c $<
 
 .PHONY: all re clean fclean

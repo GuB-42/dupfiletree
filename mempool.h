@@ -18,7 +18,7 @@ template <class T, size_t BLOCK_SIZE = 1024 * 1024> class MemPool {
 	};
 
 public:
-	MemPool() : head(NULL) {
+	MemPool() : count(0), head(NULL) {
 	}
 
 	~MemPool() {
@@ -36,6 +36,7 @@ public:
 			if (offset_from_head + size <= BLOCK_SIZE) {
 				char *ret = (char *)head + offset_from_head;
 				head->offset += size;
+				++count;
 				return reinterpret_cast<T *>(ret);
 			}
 		}
@@ -43,38 +44,34 @@ public:
 		size_t new_block_size =
 			size + header_size > BLOCK_SIZE ?
 			size + header_size : BLOCK_SIZE;
-		new_block = reinterpret_cast<MemPoolHeader *>(malloc(new_block_size));
-		new_block->next = head;
-		new_block->offset = size;
-		head = new_block;
-		return reinterpret_cast<T *>((char *)new_block + header_size);
+		new_block = reinterpret_cast<MemPoolHeader *>(::malloc(new_block_size));
+		if (new_block) {
+			new_block->next = head;
+			new_block->offset = size;
+			head = new_block;
+			++count;
+			return reinterpret_cast<T *>((char *)new_block + header_size);
+		} else {
+			return NULL;
+		}
 	}
 
-	void shallow_clear() {
-		while (head && head->offset > BLOCK_SIZE) {
-			MemPoolHeader *t = head->next;
-			head->next = t->next;
-			free(t);
-		}
-		if (head) {
-			while (head->next) {
-				MemPoolHeader *t = head->next;
-				head->next = t->next;
-				free(t);
-			}
-			head->offset = 0;
-		}
+	void free(T *) {
+		--count;
+		if (!count) clear();
 	}
 
 	void clear() {
+		count = 0;
 		while (head) {
 			MemPoolHeader *t = head;
 			head = t->next;
-			free(t);
+			::free(t);
 		}
 	}
 
 private:
+	size_t count;
 	MemPoolHeader *head;
 
 	MemPool(const MemPool &);

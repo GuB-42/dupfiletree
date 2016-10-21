@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "skiplist.h"
 #include "mempool.h"

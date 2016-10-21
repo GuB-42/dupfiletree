@@ -8,13 +8,6 @@
 MemPool<char> string_pool;
 MemPool<Node> NodePoolAlloc::pool;
 
-struct IdElt {
-	IdElt() : count(0), slave(false), master(false) {};
-	unsigned count;
-	bool     slave;
-	bool     master;
-};
-
 Node::Node(const std::string &n) :
 	size(0), parent(NULL), child(NULL), child_count(0),
 	sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false),
@@ -227,6 +220,13 @@ void Node::print_tree(const std::string &prefix) const
 	}
 }
 
+struct IdElt {
+	IdElt() : count(0), slave(false), master(false) {};
+	unsigned count;
+	bool     slave;
+	bool     master;
+};
+
 bool Node::group_dir(bool equal_only)
 {
 	if (group) return false;
@@ -370,7 +370,7 @@ bool Node::group_dirs(bool equal_only)
 }
 
 void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_list,
-                      bool child_groups)
+                            bool child_groups)
 {
 	for (Node *p = child; p; p = p->sibling) {
 		p->build_group_list(group_list, child_groups);

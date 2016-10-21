@@ -104,7 +104,7 @@ static std::string to_human_str(unsigned long long v)
 	return "?";
 }
 
-void read_file(Node *root_node, std::istream *infile)
+void read_file(Node *root_node, std::istream *infile, const char *filename)
 {
 	for (std::string line; std::getline(*infile, line); ) {
 		try {
@@ -146,7 +146,7 @@ void read_file(Node *root_node, std::istream *infile)
 				}
 			}
 		} catch (const char *s) {
-			std::cout << s << " : " << line << std::endl;
+			std::cout << filename << ":" << line << ": " << s << std::endl;
 		}
 	}
 }
@@ -188,11 +188,11 @@ int main(int argc, char* argv[])
 		for (int i = 1; i < argc; ++i) {
 			std::ifstream infile;
 			infile.open(argv[i]);
-			read_file(root_node, &infile);
+			read_file(root_node, &infile, argv[i]);
 			infile.close();
 		}
 	} else {
-		read_file(root_node, &std::cin);
+		read_file(root_node, &std::cin, "stdin");
 	}
 	hash_skip_list.clear();
 

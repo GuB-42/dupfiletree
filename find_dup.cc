@@ -16,6 +16,7 @@ bool        option_print_tree = false;
 bool        option_child_groups = false;
 bool        option_zero = false;
 std::string option_format("5s");
+std::string option_only_in;
 
 struct HashElt;
 struct HashPoolAlloc {
@@ -158,7 +159,7 @@ int main(int argc, char* argv[])
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "hef:tcz")) != -1) {
+	while ((opt = getopt(argc, argv, "hef:tczo:")) != -1) {
 		switch (opt) {
 		case 'e':
 			option_equal = true;
@@ -174,6 +175,9 @@ int main(int argc, char* argv[])
 			break;
 		case 't':
 			option_print_tree = true;
+			break;
+		case 'o':
+			option_only_in = optarg;
 			break;
 		case 'h':
 		default:
@@ -227,6 +231,13 @@ int main(int argc, char* argv[])
 		std::cout << "group size : " << it->first <<
 			" (" << to_human_str(it->first) <<  ")" << std::endl;
 		it->second->print_group();
+	}
+
+	if (!option_only_in.empty()) {
+		Node *origin = root_node->find_node(option_only_in);
+		if (origin) {
+			origin->print_only_in_list(origin);
+		}
 	}
 
 	group_list.clear();

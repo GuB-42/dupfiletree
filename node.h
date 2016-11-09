@@ -33,6 +33,7 @@ struct Node : public NodePoolAlloc {
 	bool                vnode;
 
 	Node *insert_node(const std::string &path, unsigned long long size);
+	Node *find_node(const std::string &path);
 	std::string get_path() const;
 	void break_sibling_cycles();
 	void find_dupes();
@@ -45,6 +46,7 @@ struct Node : public NodePoolAlloc {
 	void print_tree(const std::string &prefix = "") const;
 	bool group_dir(bool equal_only);
 	bool group_dirs(bool equal_only);
+	void print_only_in_list(Node *origin);
 	void build_group_list(std::multimap<unsigned long long, Node *> *group_list,
 	                      bool child_groups);
 	void print_group() const;

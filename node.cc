@@ -76,6 +76,31 @@ Node *Node::insert_node(const std::string &path, unsigned long long size)
 	return cur_node;
 }
 
+Node *Node::find_node(const std::string &path)
+{
+	Node *cur_node = this;
+	for (size_t pos = 0; pos != std::string::npos && cur_node; ) {
+		size_t slash_pos = path.find('/', pos);
+		std::string new_name;
+		if (slash_pos == std::string::npos) {
+			new_name = path.substr(pos);
+			pos = std::string::npos;
+		} else {
+			new_name = path.substr(pos, slash_pos - pos);
+			pos = slash_pos + 1;
+		}
+
+		Node *p = cur_node->child;
+		while (p) {
+			if (p->name == new_name) break;
+			p = p->sibling;
+		}
+		cur_node = p;
+	}
+
+	return cur_node;
+}
+
 std::string Node::get_path() const
 {
 	std::string res;
@@ -367,6 +392,34 @@ bool Node::group_dirs(bool equal_only)
 	}
 	if (group_dir(equal_only)) res = true;
 	return res;
+}
+
+void Node::print_only_in_list(Node *origin)
+{
+	bool found_elsewhere = false;
+	bool first = true;
+	for (Node *p = this; first || p != this; p = p->group, first = false) {
+		if (!p->slave) {
+			bool found_origin = false;
+			for (Node *p2 = p; p2; p2 = p2->parent) {
+				if (p2 == origin) {
+					found_origin = true;
+					break;
+				}
+			}
+			if (!found_origin) {
+				found_elsewhere = true;
+				break;
+			}
+		}
+	}
+
+	if (!found_elsewhere) {
+		std::cout << get_path() << std::endl;
+		for (Node *p = child; p; p = p->sibling) {
+			p->print_only_in_list(origin);
+		}
+	}
 }
 
 void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_list,

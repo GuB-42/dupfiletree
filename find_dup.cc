@@ -107,6 +107,7 @@ static std::string to_human_str(unsigned long long v)
 
 void read_file(Node *root_node, std::istream *infile, const char *filename)
 {
+	size_t line_nb = 1;
 	for (std::string line; std::getline(*infile, line); ) {
 		try {
 			std::string f_md5, f_size, f_path;
@@ -147,8 +148,9 @@ void read_file(Node *root_node, std::istream *infile, const char *filename)
 				}
 			}
 		} catch (const char *s) {
-			std::cout << filename << ":" << line << ": " << s << std::endl;
+			std::cout << filename << ":" << line_nb << ": " << s << std::endl;
 		}
+		++line_nb;
 	}
 }
 

@@ -29,6 +29,49 @@ public:
 	SkipList() : max_level(0) {
 	}
 
+	class const_iterator;
+	class iterator {
+		friend class const_iterator;
+	public:
+        iterator() : ptr(NULL) { }
+        explicit iterator(SkipListElt *p) : ptr(p) { }
+        bool operator==(const iterator &o) const { return ptr == o.ptr; };
+        bool operator!=(const iterator &o) const { return ptr != o.ptr; };
+		iterator &operator++() {
+			ptr = ptr->next[0];
+			return *this;
+		}
+		T &operator*() const { return *ptr; }
+		T *operator->() const { return ptr; }
+	private:
+		SkipListElt *ptr;
+	};
+	class const_iterator {
+	public:
+        const_iterator() : ptr(NULL) { }
+        const_iterator(const iterator &o) : ptr(o.ptr) { }
+        explicit const_iterator(const SkipListElt *p) : ptr(p) { }
+        bool operator==(const const_iterator &o) const { return ptr == o.ptr; };
+        bool operator!=(const const_iterator &o) const { return ptr != o.ptr; };
+		const_iterator &operator++() {
+			ptr = ptr->next[0];
+			return *this;
+		}
+		const T &operator*() const { return *ptr; }
+		const T *operator->() const { return ptr; }
+	private:
+		const SkipListElt *ptr;
+	};
+
+	iterator begin() {
+		return iterator(max_level > 0 ? root[0] : NULL);
+	}
+	const_iterator begin() const {
+		return const_iterator(max_level > 0 ? root[0] : NULL);
+	}
+	iterator end() { return iterator(NULL); }
+	const_iterator end() const { return const_iterator(NULL); }
+
 	T* insert(const T &elt, bool *is_new = NULL) {
 		SkipListElt **pp[NB_LEVELS];
 
@@ -64,7 +107,7 @@ public:
 
 		SkipListElt *new_elt = new(new_level) SkipListElt(elt);
 		for (level = 0; level < new_level; ++level) {
-			if (new_level < max_level) {
+			if (level < max_level) {
 				new_elt->next[level] = *pp[level];
 				*pp[level] = new_elt;
 			} else {
@@ -73,7 +116,7 @@ public:
 				max_level = level + 1;
 			}
 		}
-		if (is_new) *is_new = false;
+		if (is_new) *is_new = true;
 		return new_elt;
 	}
 

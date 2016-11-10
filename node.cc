@@ -3,47 +3,51 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <vector>
+#include <algorithm>
 #include <string.h>
 
 MemPool<char> string_pool;
 MemPool<Node> NodePoolAlloc::pool;
 
-Node::Node(const std::string &n) :
+Node::Node(const char *n, size_t n_size) :
 	size(0), parent(NULL), child(NULL), child_count(0),
-	sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false),
-	vnode(n.find("%%%%") != std::string::npos)
+	sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false)
 {
-	name = string_pool.alloc(n.size() + 1);
-	memcpy(name, n.c_str(), n.size() + 1);
+	name = string_pool.alloc(n_size + 1);
+	memcpy(name, n, n_size);
+	name[n_size] = '\0';
+	vnode = (strstr(name, "%%%%") != NULL);
 }
 
 Node::~Node() {
 	string_pool.free(name);
 }
 
-Node *Node::insert_node(const std::string &path, unsigned long long size)
+Node *Node::insert_node(const char *path, unsigned long long size)
 {
 	bool new_node = false;
 
 	Node *cur_node = this;
-	for (size_t pos = 0; pos != std::string::npos; ) {
-		size_t slash_pos = path.find('/', pos);
-		std::string new_name;
-		if (slash_pos == std::string::npos) {
-			new_name = path.substr(pos);
-			pos = std::string::npos;
-		} else {
-			new_name = path.substr(pos, slash_pos - pos);
-			pos = slash_pos + 1;
+	size_t path_len = strlen(path);
+	const char *path_ptr = path;
+	while (*path_ptr) {
+		size_t subpath_len = path_len - (path_ptr - path);
+
+		const char *slash_ptr = strchr(path_ptr, '/');
+		if (slash_ptr) {
+			subpath_len = slash_ptr - path_ptr;
 		}
 
 		Node *p = NULL;
 		if (cur_node->child) {
 			p = cur_node->child;
-			if (p->name != new_name) {
+			if (strncmp(path_ptr, p->name, subpath_len) != 0 ||
+			    p->name[subpath_len] != '\0') {
 				p = p->sibling;
 				while (p != cur_node->child) {
-					if (p->name == new_name) break;
+					if (strncmp(path_ptr, p->name, subpath_len) == 0 &&
+					    p->name[subpath_len] == '\0') break;
 					p = p->sibling;
 				}
 				if (p == cur_node->child) p = NULL;
@@ -51,7 +55,7 @@ Node *Node::insert_node(const std::string &path, unsigned long long size)
 		}
 
 		if (!p) {
-			p = new Node(new_name);
+			p = new Node(path_ptr, subpath_len);
 			p->parent = cur_node;
 			if (cur_node->child) {
 				p->sibling = cur_node->child->sibling;
@@ -64,6 +68,8 @@ Node *Node::insert_node(const std::string &path, unsigned long long size)
 
 		cur_node->child = p;
 		cur_node = p;
+		path_ptr += subpath_len;
+		while (*path_ptr == '/') ++path_ptr;
 	}
 
 	if (new_node) {
@@ -76,26 +82,26 @@ Node *Node::insert_node(const std::string &path, unsigned long long size)
 	return cur_node;
 }
 
-Node *Node::find_node(const std::string &path)
+Node *Node::find_node(const char *path)
 {
 	Node *cur_node = this;
-	for (size_t pos = 0; pos != std::string::npos && cur_node; ) {
-		size_t slash_pos = path.find('/', pos);
-		std::string new_name;
-		if (slash_pos == std::string::npos) {
-			new_name = path.substr(pos);
-			pos = std::string::npos;
-		} else {
-			new_name = path.substr(pos, slash_pos - pos);
-			pos = slash_pos + 1;
+	size_t path_len = strlen(path);
+	const char *path_ptr = path;
+	while (*path_ptr && cur_node) {
+		size_t subpath_len = path_len - (path_ptr - path);
+		const char *slash_ptr = strchr(path_ptr, '/');
+		if (slash_ptr) {
+			subpath_len = slash_ptr - path_ptr;
 		}
-
 		Node *p = cur_node->child;
-		while (p) {
-			if (p->name == new_name) break;
+		while (p != cur_node->child) {
+			if (strncmp(path_ptr, p->name, subpath_len) == 0 &&
+			    p->name[subpath_len] == '\0') break;
 			p = p->sibling;
 		}
 		cur_node = p;
+		path_ptr += subpath_len;
+		while (*path_ptr == '/') ++path_ptr;
 	}
 
 	return cur_node;
@@ -495,18 +501,58 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 	}
 }
 
+bool Node::group_sort_less(const Node *a, const Node *b)
+{
+	if (!a->slave && b->slave) return true;
+	if (a->slave && !b->slave) return false;
+	if (b->size < a->size) return true;
+	if (a->size < b->size) return false;
+
+	unsigned depth_a = 0;
+	for (const Node *p = a; p; p = p->parent) {
+		if (b == p) return false;
+		++depth_a;
+	}
+	unsigned depth_b = 0;
+	for (const Node *p = b; p; p = p->parent) {
+		if (a == p) return true;
+		++depth_b;
+	}
+
+	const Node *pa = a;
+	const Node *pb = b;
+	while (depth_a < depth_b) {
+		pb = pb->parent;
+		--depth_b;
+	}
+	while (depth_b < depth_a) {
+		pa = pa->parent;
+		--depth_a;
+	}
+	while (pa->parent) {
+		if (pa->parent == pb->parent) {
+			return (strcmp(pa->name, pb->name) < 0);
+		}
+		pa = pa->parent;
+		pb = pb->parent;
+	}
+
+	return true;
+}
+
 void Node::print_group() const
 {
-	std::multimap<unsigned long long, const Node *> cur_group;
+	std::vector<const Node *> cur_group;
 
 	bool first = true;
 	for (const Node *p = this; first || p != this; p = p->group, first = false) {
-		cur_group.insert(std::pair<unsigned long long, const Node *>(p->size, p));
+		cur_group.push_back(p);
 	}
-	for (std::map<unsigned long long, const Node *>::const_reverse_iterator it =
-	     cur_group.rbegin(); it != cur_group.rend(); ++it) {
-		std::cout << (it->second->slave ? " S " : " M ") <<
-			it->second->size << " " << it->second->get_path() << std::endl;
+	std::sort(cur_group.begin(), cur_group.end(), group_sort_less);
+	for (std::vector<const Node *>::const_iterator it =
+	     cur_group.begin(); it != cur_group.end(); ++it) {
+		std::cout << ((*it)->slave ? " S " : " M ") <<
+			(*it)->size << " " << (*it)->get_path() << std::endl;
 	}
 	std::cout << std::endl;
 }

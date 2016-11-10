@@ -140,7 +140,7 @@ void read_file(Node *root_node, std::istream *infile, const char *filename)
 
 			if (option_zero ||
 			    size != 0 || f_md5 != "d41d8cd98f00b204e9800998ecf8427e") {
-				Node *node = root_node->insert_node(f_path, size);
+				Node *node = root_node->insert_node(f_path.c_str(), size);
 
 				if (!node->group && f_md5.length() == 32 &&
 				    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
@@ -186,7 +186,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	Node *root_node = new Node(".");
+	Node *root_node = new Node(".", 1);
 
 	std::multimap<unsigned long long, Node *> group_list;
 
@@ -234,7 +234,7 @@ int main(int argc, char* argv[])
 	}
 
 	if (!option_only_in.empty()) {
-		Node *origin = root_node->find_node(option_only_in);
+		Node *origin = root_node->find_node(option_only_in.c_str());
 		if (origin) {
 			origin->print_only_in_list(origin);
 		}

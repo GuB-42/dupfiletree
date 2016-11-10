@@ -17,7 +17,7 @@ struct NodePoolAlloc {
 };
 
 struct Node : public NodePoolAlloc {
-	explicit Node(const std::string &n);
+	explicit Node(const char *name, size_t name_size);
 	~Node();
 
 	char                *name;
@@ -32,8 +32,8 @@ struct Node : public NodePoolAlloc {
 	bool                visited;
 	bool                vnode;
 
-	Node *insert_node(const std::string &path, unsigned long long size);
-	Node *find_node(const std::string &path);
+	Node *insert_node(const char *path, unsigned long long size);
+	Node *find_node(const char *path);
 	std::string get_path() const;
 	void break_sibling_cycles();
 	void find_dupes();
@@ -52,6 +52,8 @@ struct Node : public NodePoolAlloc {
 	void print_group() const;
 	void clear_children();
 private:
+	static bool group_sort_less(const Node *a, const Node *b);
+
 	Node(const Node &);
 	Node &operator=(const Node &);
 };

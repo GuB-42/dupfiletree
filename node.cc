@@ -12,7 +12,8 @@ MemPool<Node> NodePoolAlloc::pool;
 
 Node::Node(const char *n, size_t n_size) :
 	size(0), parent(NULL), child(NULL), child_count(0),
-	sibling(NULL), group(NULL), dupe(NULL), slave(false), visited(false)
+	sibling(NULL), group(NULL), dupe(NULL),
+	slave(false), visited(false), last_child(false)
 {
 	name = string_pool.alloc(n_size + 1);
 	memcpy(name, n, n_size);
@@ -24,6 +25,13 @@ Node::~Node() {
 	string_pool.free(name);
 }
 
+static int xstrncmp(const char *a, const char *b, size_t a_length)
+{
+	int res = strncmp(a, b, a_length);
+	if (res != 0) return res;
+	return b[a_length] == '\0' ? 0 : 1;
+}
+
 Node *Node::insert_node(const char *path, unsigned long long size)
 {
 	bool new_node = false;
@@ -31,7 +39,7 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 	Node *cur_node = this;
 	size_t path_len = strlen(path);
 	const char *path_ptr = path;
-	while (*path_ptr) {
+	while (path_ptr) {
 		size_t subpath_len = path_len - (path_ptr - path);
 
 		const char *slash_ptr = strchr(path_ptr, '/');
@@ -39,37 +47,71 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 			subpath_len = slash_ptr - path_ptr;
 		}
 
-		Node *p = NULL;
+		Node *insert_after_point = NULL;
+		bool insert_last_child = false;
+
+		Node *found_p = NULL;
 		if (cur_node->child) {
-			p = cur_node->child;
-			if (strncmp(path_ptr, p->name, subpath_len) != 0 ||
-			    p->name[subpath_len] != '\0') {
-				p = p->sibling;
-				while (p != cur_node->child) {
-					if (strncmp(path_ptr, p->name, subpath_len) == 0 &&
-					    p->name[subpath_len] == '\0') break;
-					p = p->sibling;
+			Node *p = cur_node->child;
+			Node *prev_p = NULL;
+			while (!found_p && !insert_after_point) {
+				int cmp_res = xstrncmp(path_ptr, p->name, subpath_len);
+				if (cmp_res == 0) {
+					found_p = p;
+				} else if (cmp_res > 0) {
+					if (p->last_child) {
+						insert_after_point = p;
+						insert_last_child = true;
+					} else {
+						prev_p = p;
+						p = p->sibling;
+					}
+				} else if (cmp_res < 0) {
+					if (prev_p) {
+						insert_after_point = prev_p;
+						insert_last_child = false;
+					} else {
+						if (p == p->sibling) {
+							insert_after_point = p;
+							insert_last_child = false;
+						} else {
+							prev_p = p;
+							while (!prev_p->last_child) {
+								prev_p = prev_p->sibling;
+							}
+							p = prev_p->sibling;
+						}
+					}
 				}
-				if (p == cur_node->child) p = NULL;
 			}
 		}
 
-		if (!p) {
-			p = new Node(path_ptr, subpath_len);
-			p->parent = cur_node;
-			if (cur_node->child) {
-				p->sibling = cur_node->child->sibling;
-				cur_node->child->sibling = p;
+		if (!found_p) {
+			Node *new_p = new Node(path_ptr, subpath_len);
+			new_p->parent = cur_node;
+			if (insert_after_point) {
+				if (insert_last_child) {
+					new_p->last_child = true;
+					insert_after_point->last_child = false;
+				}
+				new_p->sibling = insert_after_point->sibling;
+				insert_after_point->sibling = new_p;
 			} else {
-				p->sibling = p;
+				new_p->last_child = true;
+				new_p->sibling = new_p;
 			}
 			new_node = true;
+			found_p = new_p;
 		}
 
-		cur_node->child = p;
-		cur_node = p;
+		cur_node->child = found_p;
+		cur_node = found_p;
 		path_ptr += subpath_len;
-		while (*path_ptr == '/') ++path_ptr;
+		if (*path_ptr == '/') {
+			++path_ptr;
+		} else if (*path_ptr == '\0') {
+			path_ptr = NULL;
+		}
 	}
 
 	if (new_node) {
@@ -125,6 +167,7 @@ void Node::break_sibling_cycles()
 {
 	if (!child) return;
 	Node *p = child;
+	while (!p->last_child) p = p->sibling;
 	child = p->sibling;
 	p->sibling = NULL;
 	for (p = child; p; p = p->sibling) {
@@ -403,19 +446,22 @@ bool Node::group_dirs(bool equal_only)
 void Node::print_only_in_list(Node *origin)
 {
 	bool found_elsewhere = false;
-	bool first = true;
-	for (Node *p = this; first || p != this; p = p->group, first = false) {
-		if (!p->slave) {
-			bool found_origin = false;
-			for (Node *p2 = p; p2; p2 = p2->parent) {
-				if (p2 == origin) {
-					found_origin = true;
+
+	if (group) {
+		bool first = true;
+		for (Node *p = this; first || p != this; p = p->group, first = false) {
+			if (!p->slave) {
+				bool found_origin = false;
+				for (Node *p2 = p; p2; p2 = p2->parent) {
+					if (p2 == origin) {
+						found_origin = true;
+						break;
+					}
+				}
+				if (!found_origin) {
+					found_elsewhere = true;
 					break;
 				}
-			}
-			if (!found_origin) {
-				found_elsewhere = true;
-				break;
 			}
 		}
 	}
@@ -544,15 +590,19 @@ void Node::print_group() const
 {
 	std::vector<const Node *> cur_group;
 
-	bool first = true;
-	for (const Node *p = this; first || p != this; p = p->group, first = false) {
-		cur_group.push_back(p);
-	}
-	std::sort(cur_group.begin(), cur_group.end(), group_sort_less);
-	for (std::vector<const Node *>::const_iterator it =
-	     cur_group.begin(); it != cur_group.end(); ++it) {
-		std::cout << ((*it)->slave ? " S " : " M ") <<
-			(*it)->size << " " << (*it)->get_path() << std::endl;
+	if (group) {
+		bool first = true;
+		for (const Node *p = this; first || p != this; p = p->group, first = false) {
+			cur_group.push_back(p);
+		}
+		std::sort(cur_group.begin(), cur_group.end(), group_sort_less);
+		for (std::vector<const Node *>::const_iterator it =
+		     cur_group.begin(); it != cur_group.end(); ++it) {
+			std::cout << ((*it)->slave ? " S " : " M ") <<
+				(*it)->size << " " << (*it)->get_path() << std::endl;
+		}
+	} else {
+		std::cout << "N" << size << " " << get_path() << std::endl;
 	}
 	std::cout << std::endl;
 }

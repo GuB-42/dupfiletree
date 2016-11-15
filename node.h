@@ -31,6 +31,7 @@ struct Node : public NodePoolAlloc {
 	bool                slave;
 	bool                visited;
 	bool                vnode;
+	bool                last_child;
 
 	Node *insert_node(const char *path, unsigned long long size);
 	Node *find_node(const char *path);

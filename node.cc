@@ -153,7 +153,7 @@ std::string Node::get_path() const
 {
 	std::string res;
 
-	for (const Node *p = this; p; p = p->parent) {
+	for (const Node *p = this; p && p->parent; p = p->parent) {
 		if (res.empty()) {
 			res = std::string(p->name);
 		} else {

@@ -21,19 +21,10 @@
 #include <mcheck.h>
 #endif
 
-struct FileList {
-	struct FileList *next;
-	char line[];
-};
-
-static struct FileList *free_flist(struct FileList *flist)
-{
-	while (flist) {
-		struct FileList *p = flist;
-		flist = p->next;
-		free(p);
-	}
-	return 0;
+static size_t grow_size(size_t size) {
+	if (size < 1024) return 1024;
+	if (size > 1048576) return size + 1048576;
+	return size << 1;
 }
 
 const char *get_escape_pt(const char *filename_pt, const char **prepl)
@@ -138,10 +129,28 @@ void print_error_line(const char *error, const char *error2, const char *escaped
 	printf("%s                X %s\n", xerror, escaped_filename);
 }
 
+
+int sort_str_with_xmd5(const void *a, const void *b)
+{
+	const char *a_str = *(char * const *)a;
+	const char *b_str = *(char * const *)b;
+	while (*a_str != ' ' && *a_str != '\0') ++a_str;
+	while (*a_str == ' ') ++a_str;
+	while (*a_str != ' ' && *a_str != '\0') ++a_str;
+	while (*a_str == ' ') ++a_str;
+	while (*b_str != ' ' && *b_str != '\0') ++b_str;
+	while (*b_str == ' ') ++b_str;
+	while (*b_str != ' ' && *b_str != '\0') ++b_str;
+	while (*b_str == ' ') ++b_str;
+	return strcmp(a_str, b_str);
+}
+
 int do_xmd5_archive(const char *filename, const char *escaped_filename)
 {
-	struct FileList *flist = NULL;
-	struct FileList **flist_last = &flist;
+	char **flist = NULL;
+	char **flist_p = NULL;
+	size_t flist_alloc_size = 0;
+	char **p;
 	struct archive *a;
 	struct archive_entry *entry;
 	void *buf = NULL;
@@ -179,19 +188,25 @@ int do_xmd5_archive(const char *filename, const char *escaped_filename)
 		}
 		if (MD5_Final(md5_out, &c) != 1) goto bad_archive2;
 
-		*flist_last = (struct FileList *)
-			malloc(offsetof(struct FileList, line) + MD5_DIGEST_LENGTH * 2 + 2 +
+		if ((size_t)(flist_p - flist) >= flist_alloc_size) {
+			char **t;
+			flist_alloc_size = grow_size(flist_alloc_size);
+			t = (char **)realloc(flist, flist_alloc_size * sizeof (char *));
+			if (!t) goto bad_archive2;
+			flist_p = t + (flist_p - flist);
+			flist = t;
+		}
+		*flist_p = (char *)
+			malloc(MD5_DIGEST_LENGTH * 2 + 2 +
 			       33 + strlen(archive_entry_pathname(entry)) +
 			       5 + strlen(escaped_filename) + 1);
-		if (!*flist_last) goto bad_archive2;
-		(*flist_last)->next = NULL;
+		if (!*flist_p) goto bad_archive2;
 		for (j = 0; j < MD5_DIGEST_LENGTH; ++j) {
-			sprintf((*flist_last)->line + 2 * j, "%02x", md5_out[j]);
+			sprintf(*flist_p + 2 * j, "%02x", md5_out[j]);
 		}
-		sprintf((*flist_last)->line + 2 * MD5_DIGEST_LENGTH,
-		        "  %15llu %s%%%%%%%%/%s",
+		sprintf(*flist_p + 2 * MD5_DIGEST_LENGTH, "  %15llu %s%%%%%%%%/%s",
 		        fsize, escaped_filename, archive_entry_pathname(entry));
-		flist_last = &(*flist_last)->next;
+		++flist_p;
 	}
 	free(buf);
 	buf = NULL;
@@ -199,18 +214,19 @@ int do_xmd5_archive(const char *filename, const char *escaped_filename)
 	if (rh_ret != ARCHIVE_EOF) goto bad_archive2;
 	if (archive_read_free(a) != ARCHIVE_OK) goto bad_archive;
 
-	while (flist) {
-		struct FileList *p = flist;
-		printf("%s\n", p->line);
-		flist = p->next;
-		free(p);
+	qsort(flist, flist_p - flist, sizeof (char **), sort_str_with_xmd5);
+	for (p = flist; p < flist_p; ++p) {
+		printf("%s\n", *p);
+		free(*p);
 	}
+	free(flist);
 
 	return 0;
 bad_archive2:
 	archive_read_free(a);
 bad_archive:
-	free_flist(flist);
+	for (p = flist; p < flist_p; ++p) free(*p);
+	free(flist);
 	free(buf);
 	return -1;
 }
@@ -274,6 +290,11 @@ file_error:
 
 int do_xmd5(const char *filename);
 
+int sort_str(const void *a, const void *b)
+{
+	return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
 int do_xmd5_dir(const char *filename, const char *escaped_filename)
 {
 	DIR *dir;
@@ -282,8 +303,10 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 	size_t filename_len = strlen(filename);
 	struct dirent *dir_entry_buf = NULL;
 	struct dirent *dir_entry;
-	struct FileList *flist = NULL;
-	struct FileList **flist_last = &flist;
+	char **flist = NULL;
+	char **flist_p = NULL;
+	size_t flist_alloc_size = 0;
+	char **p;
 
 	if (!(dir = opendir(filename))) goto bad_dir_errno;
 	if ((pathlen = pathconf(filename, _PC_NAME_MAX)) == -1) goto bad_dir2_pathconv;
@@ -295,26 +318,32 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 		if (strcmp(dir_entry->d_name, ".") != 0 &&
 		    strcmp(dir_entry->d_name, "..") != 0) {
 			size_t fname_len = strlen(dir_entry->d_name);
-			*flist_last = (struct FileList *)malloc(offsetof(struct FileList, line) +
-			                                        filename_len + 1 + fname_len + 1);
-			if (!*flist_last) goto bad_dir2_errno;
-			(*flist_last)->next = NULL;
-			memcpy((*flist_last)->line, filename, filename_len);
-			(*flist_last)->line[filename_len] = '/';
-			memcpy((*flist_last)->line + filename_len + 1,
+			if ((size_t)(flist_p - flist) >= flist_alloc_size) {
+				char **t;
+				flist_alloc_size = grow_size(flist_alloc_size);
+				t = (char **)realloc(flist, flist_alloc_size * sizeof (char *));
+				if (!t) goto bad_dir2_errno;
+				flist_p = t + (flist_p - flist);
+				flist = t;
+			}
+			*flist_p = (char *)malloc(filename_len + 1 + fname_len + 1);
+			if (!*flist_p) goto bad_dir2_errno;
+			memcpy(*flist_p, filename, filename_len);
+			(*flist_p)[filename_len] = '/';
+			memcpy(*flist_p + filename_len + 1,
 			       dir_entry->d_name, fname_len + 1);
-			flist_last = &(*flist_last)->next;
+			++flist_p;
 		}
 	}
 	free(dir_entry_buf);
 	if (closedir(dir) != 0) goto bad_dir_errno;
 
-	while (flist) {
-		struct FileList *p = flist;
-		do_xmd5(p->line);
-		flist = p->next;
-		free(p);
+	qsort(flist, flist_p - flist, sizeof (char **), sort_str);
+	for (p = flist; p < flist_p; ++p) {
+		do_xmd5(*p);
+		free(*p);
 	}
+	free(flist);
 
 	return 0;
 bad_dir2_pathconv:
@@ -327,7 +356,8 @@ bad_dir_errno:
 	print_error_line("bad dir", strerror(errno), escaped_filename);
 	goto dir_error;
 dir_error2:
-	free_flist(flist);
+	for (p = flist; p < flist_p; ++p) free(*p);
+	free(flist);
 	free(dir_entry_buf);
 	closedir(dir);
 dir_error:

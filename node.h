@@ -17,21 +17,22 @@ struct NodePoolAlloc {
 };
 
 struct Node : public NodePoolAlloc {
-	explicit Node(const char *name, size_t name_size);
+	explicit Node(const char *name, size_t name_size, bool vnode);
 	~Node();
 
-	char                *name;
 	unsigned long long  size;
+	char                *name;
 	Node                *parent;
 	Node                *child;
-	unsigned            child_count;
 	Node                *sibling;
 	Node                *group;
-	Node                *dupe;
-	bool                slave;
-	bool                visited;
-	bool                vnode;
-	bool                last_child;
+	unsigned            child_count;
+	bool                sibling_dupe:1; // this node is the same as one of its siblings
+	bool                parent_dupe:1; // this not is the same as its parent
+	bool                slave:1;
+	bool                visited:1;
+	bool                vnode:1;
+	bool                last_child:1;
 
 	Node *insert_node(const char *path, unsigned long long size);
 	Node *find_node(const char *path);

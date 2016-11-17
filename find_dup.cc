@@ -6,10 +6,41 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "skiplist.h"
 #include "mempool.h"
 #include "node.h"
+
+unsigned long long total_alloc = 0;
+struct timeval last_tv = { 0, 0 };
+
+static std::string get_current_time()
+{
+	time_t rawtime;
+	struct tm *timeinfo;
+	char tbuf[256];
+	struct timeval new_tv;
+	struct timeval delta_tv;
+
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+	strftime(tbuf, sizeof (tbuf), "%F %T", timeinfo);
+
+	gettimeofday(&new_tv, NULL);
+	if (new_tv.tv_usec >= last_tv.tv_usec) {
+		delta_tv.tv_usec = new_tv.tv_usec - last_tv.tv_usec;
+		delta_tv.tv_sec = new_tv.tv_sec - last_tv.tv_sec;
+	} else {
+		delta_tv.tv_usec = 1000000 + new_tv.tv_usec - last_tv.tv_usec;
+		delta_tv.tv_sec = new_tv.tv_sec - last_tv.tv_sec - 1;
+	}
+	last_tv = new_tv;
+
+	sprintf(tbuf + strlen(tbuf), " (+%ld.%06ld)", delta_tv.tv_sec, delta_tv.tv_usec);
+	return std::string(tbuf);
+}
 
 bool        option_equal = false;
 bool        option_print_tree = false;
@@ -186,11 +217,14 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	Node *root_node = new Node(".", 1);
+	printf("node size : %u\n", sizeof(Node));
+	printf("hash elt size : %u\n", sizeof(HashElt));
+
+	Node *root_node = new Node(".", 1, false);
 
 	std::multimap<unsigned long long, Node *> group_list;
 
-	std::cout << "building tree" << std::endl;
+	std::cout << "building tree / " << get_current_time() << std::endl;
 	if (argc > 1) {
 		for (int i = 1; i < argc; ++i) {
 			std::ifstream infile;
@@ -203,27 +237,34 @@ int main(int argc, char* argv[])
 	}
 	hash_skip_list.clear();
 
-	std::cout << "breaking cycles" << std::endl;
+	std::cout << "breaking cycles / " << get_current_time() << std::endl;
 	root_node->break_sibling_cycles();
-	std::cout << "ungrouping directories" << std::endl;
+	std::cout << "ungrouping directories / " << get_current_time() << std::endl;
 	root_node->ungroup_dirs();
-	std::cout << "finding dupes" << std::endl;
+	std::cout << "finding dupes / " << get_current_time() << std::endl;
 	root_node->find_dupes();
 	root_node->reset_visited();
-	std::cout << "counting child" << std::endl;
+	std::cout << "counting child / " << get_current_time() << std::endl;
 	root_node->compute_child_counts();
 	unsigned itn = 0;
-	std::cout << "grouping directories (equal)" << std::endl;
-	while (1) { std::cout << ++itn << std::endl; if (!root_node->group_dirs(true)) break; }
+	std::cout << "grouping directories (equal) / " << get_current_time() << std::endl;
+	while (1) {
+		std::cout << ++itn << " / " << get_current_time() << std::endl;
+		if (!root_node->group_dirs(true)) break;
+	}
 	if (!option_equal) {
-		std::cout << "grouping directories (master/slave)" << std::endl;
+		std::cout << "grouping directories (master/slave) / " << get_current_time() << std::endl;
 		root_node->kill_singles();
-		while (1) { std::cout << ++itn << std::endl; if (!root_node->group_dirs(false)) break; }
+		while (1) {
+			std::cout << ++itn << " / " << get_current_time() << std::endl;
+			if (!root_node->group_dirs(false)) break;
+		}
 	}
 
 	if (option_print_tree) root_node->print_tree();
-	std::cout << "building groups" << std::endl;
+	std::cout << "building groups / " << get_current_time() << std::endl;
 	root_node->build_group_list(&group_list, option_child_groups);
+	std::cout << "done / " << get_current_time() << std::endl;
 	for (std::multimap<unsigned long long, Node *>::const_reverse_iterator it =
 	     group_list.rbegin(); it != group_list.rend(); ++it) {
 //	for (std::multimap<unsigned long long, Node *>::const_iterator it =
@@ -243,4 +284,6 @@ int main(int argc, char* argv[])
 	group_list.clear();
 	root_node->clear_children();
 	delete root_node;
+
+	printf("total_alloc : %llu %s\n", total_alloc, get_current_time().c_str());
 }

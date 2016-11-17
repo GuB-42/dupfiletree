@@ -3,6 +3,8 @@
 
 #include <stdlib.h>
 
+extern unsigned long long total_alloc;
+
 template <class T, size_t BLOCK_SIZE = 1024 * 1024> class MemPool {
 	struct MemPoolHeader {
 		MemPoolHeader *next;
@@ -45,6 +47,7 @@ public:
 			size + header_size > BLOCK_SIZE ?
 			size + header_size : BLOCK_SIZE;
 		new_block = reinterpret_cast<MemPoolHeader *>(::malloc(new_block_size));
+		total_alloc += new_block_size;
 		if (new_block) {
 			new_block->next = head;
 			new_block->offset = size;

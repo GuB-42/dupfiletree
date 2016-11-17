@@ -7,29 +7,25 @@
 #include <algorithm>
 #include <string.h>
 
+#define VNODE_MARKER "%%%%"
+
 MemPool<char> string_pool;
 MemPool<Node> NodePoolAlloc::pool;
 
-Node::Node(const char *n, size_t n_size) :
-	size(0), parent(NULL), child(NULL), child_count(0),
-	sibling(NULL), group(NULL), dupe(NULL),
-	slave(false), visited(false), last_child(false)
+Node::Node(const char *n, size_t n_size, bool vnode) :
+	size(0), parent(NULL), child(NULL),
+	sibling(NULL), group(NULL), child_count(0),
+	sibling_dupe(false), parent_dupe(false),
+	slave(false), visited(false), vnode(vnode),
+	last_child(false)
 {
 	name = string_pool.alloc(n_size + 1);
 	memcpy(name, n, n_size);
 	name[n_size] = '\0';
-	vnode = (strstr(name, "%%%%") != NULL);
 }
 
 Node::~Node() {
 	string_pool.free(name);
-}
-
-static int xstrncmp(const char *a, const char *b, size_t a_length)
-{
-	int res = strncmp(a, b, a_length);
-	if (res != 0) return res;
-	return b[a_length] == '\0' ? 0 : 1;
 }
 
 Node *Node::insert_node(const char *path, unsigned long long size)
@@ -41,10 +37,17 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 	const char *path_ptr = path;
 	while (path_ptr) {
 		size_t subpath_len = path_len - (path_ptr - path);
+		bool subpath_vnode = false;
 
 		const char *slash_ptr = strchr(path_ptr, '/');
 		if (slash_ptr) {
 			subpath_len = slash_ptr - path_ptr;
+		}
+		size_t vmsz = strlen(VNODE_MARKER);
+		if (subpath_len >= vmsz &&
+		    memcmp(path_ptr + subpath_len - vmsz, VNODE_MARKER, vmsz) == 0) {
+			subpath_len -= vmsz;
+			subpath_vnode = true;
 		}
 
 		Node *insert_after_point = NULL;
@@ -55,7 +58,12 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 			Node *p = cur_node->child;
 			Node *prev_p = NULL;
 			while (!found_p && !insert_after_point) {
-				int cmp_res = xstrncmp(path_ptr, p->name, subpath_len);
+				int cmp_res = strncmp(path_ptr, p->name, subpath_len);
+				if (cmp_res == 0) {
+					if (p->name[subpath_len] != '\0') cmp_res = -1;
+					if (!subpath_vnode && p->vnode) cmp_res = -1;
+					if (subpath_vnode && !p->vnode) cmp_res = 1;
+				}
 				if (cmp_res == 0) {
 					found_p = p;
 				} else if (cmp_res > 0) {
@@ -87,7 +95,7 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 		}
 
 		if (!found_p) {
-			Node *new_p = new Node(path_ptr, subpath_len);
+			Node *new_p = new Node(path_ptr, subpath_len, subpath_vnode);
 			new_p->parent = cur_node;
 			if (insert_after_point) {
 				if (insert_last_child) {
@@ -106,12 +114,8 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 
 		cur_node->child = found_p;
 		cur_node = found_p;
-		path_ptr += subpath_len;
-		if (*path_ptr == '/') {
-			++path_ptr;
-		} else if (*path_ptr == '\0') {
-			path_ptr = NULL;
-		}
+		path_ptr = slash_ptr;
+		if (path_ptr) ++path_ptr;
 	}
 
 	if (new_node) {
@@ -138,7 +142,7 @@ Node *Node::find_node(const char *path)
 		Node *p = cur_node->child;
 		while (p != cur_node->child) {
 			if (strncmp(path_ptr, p->name, subpath_len) == 0 &&
-			    p->name[subpath_len] == '\0') break;
+			    p->name[subpath_len] == '\0' && !p->vnode) break;
 			p = p->sibling;
 		}
 		cur_node = p;
@@ -154,11 +158,9 @@ std::string Node::get_path() const
 	std::string res;
 
 	for (const Node *p = this; p && p->parent; p = p->parent) {
-		if (res.empty()) {
-			res = std::string(p->name);
-		} else {
-			res = std::string(p->name) + '/' + res;
-		}
+		std::string n = p->name;
+		if (p->vnode) n += VNODE_MARKER;
+		res = res.empty() ? n : n + '/' + res;
 	}
 	return res;
 }
@@ -196,7 +198,7 @@ void Node::find_dupes()
 
 			std::map<Node *, Node *>::const_iterator it = parents.find(p->parent);
 			if (it != parents.end()) {
-				p->dupe = it->second;
+				p->sibling_dupe = true;
 			} else {
 				parents[p->parent] = p;
 			}
@@ -214,7 +216,7 @@ void Node::compute_child_counts()
 	child_count = 0;
 	for (Node *p = child; p; p = p->sibling) {
 		if (p->vnode) continue;
-		if (p->dupe) continue;
+		if (p->sibling_dupe || p->parent_dupe) continue;
 		++child_count;
 	}
 }
@@ -274,7 +276,7 @@ void Node::enslave_group()
 void Node::print_tree(const std::string &prefix) const
 {
 	std::cout << prefix << "+-" << name << " " << size << " " << child_count;
-	if (dupe) std::cout << "*";
+	if (parent_dupe || sibling_dupe) std::cout << "*";
 	if (group) {
 		if (group == group->group) {
 			std::cout << " (U) ";
@@ -313,9 +315,9 @@ bool Node::group_dir(bool equal_only)
 
 	if (child_count == 1) {
 		for (Node *p = child; p; p = p->sibling) {
-			if (!p->dupe && !p->vnode) {
+			if (!p->sibling_dupe && !p->parent_dupe && !p->vnode) {
 				slave = p->slave;
-				p->dupe = this;
+				p->parent_dupe = true;
 				child_count = p->child_count;
 				group = p->group;
 				p->group = this;
@@ -328,19 +330,18 @@ bool Node::group_dir(bool equal_only)
 	std::map<Node *, IdElt> id_map;
 	for (Node *p = child; p; p = p->sibling) {
 		if (p->vnode) continue;
-		if (p->dupe) continue;
+		if (p->sibling_dupe || p->parent_dupe) continue;
 		for (Node *p2 = p->group; p2 != p; p2 = p2->group) {
 			if (p2->vnode) continue;
-			if (p2->dupe) continue;
+			if (p2->sibling_dupe || p2->parent_dupe) continue;
 			if (p2->parent == this) continue;
 			if (!p2->parent) continue;
 			Node *p2_parent = p2->parent;
-			while (p2_parent->dupe &&
-			       p2_parent->dupe == p2_parent->parent) {
-				p2_parent = p2_parent->dupe;
+			while (p2_parent->parent_dupe) {
+				p2_parent = p2_parent->parent;
 			}
 			if (!p2_parent) continue;
-			if (p2_parent->dupe) continue;
+			if (p2->sibling_dupe || p2->parent_dupe) continue;
 			IdElt &ide = id_map[p2_parent];
 			++ide.count;
 			if (p->slave) ide.master = true;
@@ -416,13 +417,13 @@ bool Node::group_dir(bool equal_only)
 				if ((i & 1) && !p->slave) continue;
 				if (!(i & 2) && p->vnode) continue;
 				if ((i & 2) && !p->vnode) continue;
-				if (!p->dupe) {
+				if (!p->sibling_dupe && !p->parent_dupe) {
 					std::map<Node *, Node *>::const_iterator seen_it =
 						seen.find(p->parent);
 					if (seen_it == seen.end()) {
 						seen[p->parent] = p;
 					} else {
-						p->dupe = seen_it->second;
+						p->sibling_dupe = true;
 						if (!p->vnode) --p->parent->child_count;
 					}
 				}
@@ -516,7 +517,7 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 		bool parent_group_init = true;
 		for (std::set<Node *>::const_iterator it =
 		     cur_group.begin(); it != cur_group.end(); ++it) {
-			if ((*it)->dupe) continue;
+			if ((*it)->sibling_dupe || (*it)->parent_dupe) continue;
 			all_parent = false;
 			if (!(*it)->parent) break;
 			if (!(*it)->parent->group) break;
@@ -536,12 +537,22 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 	}
 
 	if (!all_parent) {
+		bool have_master_size = false;
 		unsigned long long total_size = 0;
 		unsigned long long master_size = 0;
 		for (std::set<Node *>::const_iterator it =
 		     cur_group.begin(); it != cur_group.end(); ++it) {
 			total_size += (*it)->size;
-			if (!(*it)->slave) master_size = (*it)->size;
+			if (!(*it)->slave) {
+				if (have_master_size) {
+					if ((*it)->size < master_size) {
+						master_size = (*it)->size;
+					}
+				} else {
+					master_size = (*it)->size;
+					have_master_size = true;
+				}
+			}
 		}
 		group_list->insert(std::pair<unsigned long long, Node *>(total_size - master_size, this));
 	}
@@ -577,7 +588,12 @@ bool Node::group_sort_less(const Node *a, const Node *b)
 	}
 	while (pa->parent) {
 		if (pa->parent == pb->parent) {
-			return (strcmp(pa->name, pb->name) < 0);
+			int cmp_res = strcmp(pa->name, pb->name);
+			if (cmp_res < 0) return true;
+			if (cmp_res > 0) return false;
+			if (!pa->vnode && pb->vnode) return true;
+			if (pa->vnode && !pb->vnode) return false;
+			return true; // out of options
 		}
 		pa = pa->parent;
 		pb = pb->parent;

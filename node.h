@@ -36,13 +36,14 @@ struct Node : public NodePoolAlloc {
 
 	Node *insert_node(const char *path, unsigned long long size);
 	Node *find_node(const char *path);
+	std::string get_flag_str() const;
 	std::string get_path() const;
 	void break_sibling_cycles();
 	void find_dupes();
 	void compute_child_counts();
 	void kill_singles();
 	void ungroup_dirs();
-	void reset_visited();
+	void set_visited(bool value);
 	bool parent_slave() const;
 	void enslave_group();
 	void print_tree(const std::string &prefix = "") const;

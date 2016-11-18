@@ -153,13 +153,24 @@ Node *Node::find_node(const char *path)
 	return cur_node;
 }
 
+std::string Node::get_flag_str() const
+{
+//	std::string res = "";
+//	if (parent_dupe && !sibling_dupe) res += ":";
+//	if (!parent_dupe && sibling_dupe) res += "*";
+//	if (parent_dupe && sibling_dupe) res += "#";
+//	if (vnode) res += "%";
+//	if (slave) res += "s";
+//	return res.empty() ? "" : std::string("{") + res + "}";
+	return vnode ? VNODE_MARKER : "";
+}
+
 std::string Node::get_path() const
 {
 	std::string res;
 
 	for (const Node *p = this; p && p->parent; p = p->parent) {
-		std::string n = p->name;
-		if (p->vnode) n += VNODE_MARKER;
+		std::string n = p->name + p->get_flag_str();
 		res = res.empty() ? n : n + '/' + res;
 	}
 	return res;
@@ -249,12 +260,12 @@ void Node::ungroup_dirs()
 	}
 }
 
-void Node::reset_visited()
+void Node::set_visited(bool value)
 {
 	for (Node *p = child; p; p = p->sibling) {
-		p->reset_visited();
+		p->set_visited(value);
 	}
-	visited = false;
+	visited = value;
 }
 
 bool Node::parent_slave() const
@@ -275,8 +286,11 @@ void Node::enslave_group()
 
 void Node::print_tree(const std::string &prefix) const
 {
-	std::cout << prefix << "+-" << name << " " << size << " " << child_count;
-	if (parent_dupe || sibling_dupe) std::cout << "*";
+	std::cout << prefix << "+-" << name << get_flag_str() <<
+		" " << size << " " << child_count;
+	if (parent_dupe && !sibling_dupe) std::cout << ":";
+	if (!parent_dupe && sibling_dupe) std::cout << "*";
+	if (parent_dupe && sibling_dupe) std::cout << "#";
 	if (group) {
 		if (group == group->group) {
 			std::cout << " (U) ";
@@ -315,12 +329,14 @@ bool Node::group_dir(bool equal_only)
 
 	if (child_count == 1) {
 		for (Node *p = child; p; p = p->sibling) {
-			if (!p->sibling_dupe && !p->parent_dupe && !p->vnode) {
-				slave = p->slave;
+			if (!p->vnode) {
 				p->parent_dupe = true;
-				child_count = p->child_count;
-				group = p->group;
-				p->group = this;
+				if (!p->sibling_dupe) {
+					child_count = p->child_count;
+					slave = p->slave;
+					group = p->group;
+					p->group = this;
+				}
 			}
 		}
 	} else {
@@ -341,7 +357,6 @@ bool Node::group_dir(bool equal_only)
 				p2_parent = p2_parent->parent;
 			}
 			if (!p2_parent) continue;
-			if (p2->sibling_dupe || p2->parent_dupe) continue;
 			IdElt &ide = id_map[p2_parent];
 			++ide.count;
 			if (p->slave) ide.master = true;
@@ -486,28 +501,8 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 	if (!group) return;
 	if (group == this) return;
 
-	std::set<Node *> cur_group;
-	std::map<Node *, Node *> cur_group_parents;
-
 	bool first = true;
 	for (Node *p = this; first || p != this; p = p->group, first = false) {
-		bool parent_found = false;
-		for (Node *p2 = p->parent; p2; p2 = p2->parent) {
-			if (cur_group.find(p2) != cur_group.end()) {
-				parent_found = true;
-				break;
-			}
-		}
-		if (!parent_found) {
-			std::map<Node *, Node *>::const_iterator pit = cur_group_parents.find(p);
-			if (pit != cur_group_parents.end()) {
-				cur_group.erase(pit->second);
-			}
-			cur_group.insert(p);
-			for (Node *p2 = p->parent; p2; p2 = p2->parent) {
-				cur_group_parents[p2] = p;
-			}
-		}
 		p->visited = true;
 	}
 
@@ -515,22 +510,23 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 	if (!child_groups) {
 		std::set<Node *> parent_group;
 		bool parent_group_init = true;
-		for (std::set<Node *>::const_iterator it =
-		     cur_group.begin(); it != cur_group.end(); ++it) {
-			if ((*it)->sibling_dupe || (*it)->parent_dupe) continue;
+		first = true;
+		for (Node *p = this; first || p != this; p = p->group, first = false) {
+			if (p->sibling_dupe || p->parent_dupe) continue;
 			all_parent = false;
-			if (!(*it)->parent) break;
-			if (!(*it)->parent->group) break;
-			// if (!(*it)->slave && (*it)->parent->slave) break;
+			if (!p->parent) break;
+			if (!p->parent->group) break;
+			if (p->vnode) break;
+			if (p->parent->slave) break;
 			if (parent_group_init) {
-				bool first = true;
-				for (Node *p = (*it)->parent; first || p != (*it)->parent;
-				     p = p->group, first = false) {
-					parent_group.insert(p);
+				bool first2 = true;
+				for (Node *p2 = p->parent; first2 || p2 != p->parent;
+				     p2 = p2->group, first2 = false) {
+					parent_group.insert(p2);
 				}
 				parent_group_init = false;
 			} else {
-				if (parent_group.find((*it)->parent) == parent_group.end()) break;
+				if (parent_group.find(p->parent) == parent_group.end()) break;
 				all_parent = true;
 			}
 		}
@@ -540,16 +536,18 @@ void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_lis
 		bool have_master_size = false;
 		unsigned long long total_size = 0;
 		unsigned long long master_size = 0;
-		for (std::set<Node *>::const_iterator it =
-		     cur_group.begin(); it != cur_group.end(); ++it) {
-			total_size += (*it)->size;
-			if (!(*it)->slave) {
+		first = true;
+		for (Node *p = this; first || p != this; p = p->group, first = false) {
+			if (!p->parent_dupe) {
+				total_size += p->size;
+			}
+			if (!p->slave) {
 				if (have_master_size) {
-					if ((*it)->size < master_size) {
-						master_size = (*it)->size;
+					if (p->size < master_size) {
+						master_size = p->size;
 					}
 				} else {
-					master_size = (*it)->size;
+					master_size = p->size;
 					have_master_size = true;
 				}
 			}

@@ -217,8 +217,8 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	printf("node size : %u\n", sizeof(Node));
-	printf("hash elt size : %u\n", sizeof(HashElt));
+	std::cout << "node size " << sizeof(Node) << std::endl;
+	std::cout << "hash elt size " << sizeof(HashElt) << std::endl;
 
 	Node *root_node = new Node(".", 1, false);
 
@@ -243,7 +243,7 @@ int main(int argc, char* argv[])
 	root_node->ungroup_dirs();
 	std::cout << "finding dupes / " << get_current_time() << std::endl;
 	root_node->find_dupes();
-	root_node->reset_visited();
+	root_node->set_visited(false);
 	std::cout << "counting child / " << get_current_time() << std::endl;
 	root_node->compute_child_counts();
 	unsigned itn = 0;
@@ -264,14 +264,29 @@ int main(int argc, char* argv[])
 	if (option_print_tree) root_node->print_tree();
 	std::cout << "building groups / " << get_current_time() << std::endl;
 	root_node->build_group_list(&group_list, option_child_groups);
-	std::cout << "done / " << get_current_time() << std::endl;
+	std::cout << "done: " << group_list.size() << " groups / " << get_current_time() << std::endl;
+	root_node->set_visited(false);
 	for (std::multimap<unsigned long long, Node *>::const_reverse_iterator it =
 	     group_list.rbegin(); it != group_list.rend(); ++it) {
 //	for (std::multimap<unsigned long long, Node *>::const_iterator it =
 //		 group_list.begin(); it != group_list.end(); ++it) {
-		std::cout << "group size : " << it->first <<
-			" (" << to_human_str(it->first) <<  ")" << std::endl;
-		it->second->print_group();
+		bool visited = false;
+		if (!option_child_groups) {
+			visited = true;
+			bool first = true;
+			for (Node *p = it->second; first || p != it->second; p = p->group, first = false) {
+				if (!p->visited) visited = false;
+			}
+		}
+		if (!visited) {
+			std::cout << "group size : " << (visited ? "(VISITED) " : "") << it->first <<
+				" (" << to_human_str(it->first) <<  ")" << std::endl;
+			it->second->print_group();
+			bool first = true;
+			for (Node *p = it->second; first || p != it->second; p = p->group, first = false) {
+				if (true || !p->slave) p->set_visited(true);
+			}
+		}
 	}
 
 	if (!option_only_in.empty()) {
@@ -285,5 +300,5 @@ int main(int argc, char* argv[])
 	root_node->clear_children();
 	delete root_node;
 
-	printf("total_alloc : %llu %s\n", total_alloc, get_current_time().c_str());
+	std::cout << "total_alloc : " << total_alloc << " " << get_current_time() << std::endl;
 }

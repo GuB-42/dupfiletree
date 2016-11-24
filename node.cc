@@ -490,70 +490,93 @@ void Node::print_only_in_list(Node *origin)
 	}
 }
 
-void Node::build_group_list(std::multimap<unsigned long long, Node *> *group_list,
-                            bool child_groups)
+unsigned long long Node::get_group_size()
 {
-	for (Node *p = child; p; p = p->sibling) {
-		p->build_group_list(group_list, child_groups);
-	}
+	if (!group) return 0;
 
-	if (visited) return;
-	if (!group) return;
-	if (group == this) return;
-
+	bool have_master_size = false;
+	unsigned long long total_size = 0;
+	unsigned long long master_size = 0;
 	bool first = true;
 	for (Node *p = this; first || p != this; p = p->group, first = false) {
+		if (!p->parent_dupe) {
+			total_size += p->size;
+		}
+		if (!p->slave) {
+			if (have_master_size) {
+				if (p->size < master_size) {
+					master_size = p->size;
+				}
+			} else {
+				master_size = p->size;
+				have_master_size = true;
+			}
+		}
+	}
+
+	return total_size - master_size;
+}
+
+bool Node::is_child_group()
+{
+	if (!group || group == this) return false;
+
+	std::set<Node *> parent_group;
+	bool parent_group_init = true;
+	bool first = true;
+	bool all_parent = true;
+	for (Node *p = this; first || p != this; p = p->group, first = false) {
+		if (p->sibling_dupe || p->parent_dupe) continue;
+		all_parent = false;
+		if (!p->parent) break;
+		if (!p->parent->group) break;
+		if (p->vnode) break;
+		if (p->parent->slave) break;
+		if (parent_group_init) {
+			bool first2 = true;
+			for (Node *p2 = p->parent; first2 || p2 != p->parent;
+			     p2 = p2->group, first2 = false) {
+				parent_group.insert(p2);
+			}
+			parent_group_init = false;
+		} else {
+			if (parent_group.find(p->parent) == parent_group.end()) break;
+			all_parent = true;
+		}
+	}
+	return all_parent;
+}
+
+size_t Node::build_count_group_list(GroupListElt *dest, bool child_groups)
+{
+	size_t idx = 0;
+	for (Node *p = child; p; p = p->sibling) {
+		idx += p->build_count_group_list(dest ? dest + idx : NULL, child_groups);
+	}
+
+	if (visited) return idx;
+	if (!group) return idx;
+	if (group == this) return idx;
+
+	size_t group_count = 0;
+	size_t parent_dupe_count = 0;
+	bool first = true;
+	for (Node *p = this; first || p != this; p = p->group, first = false) {
+		++group_count;
+		if (p->parent_dupe) ++parent_dupe_count;
 		p->visited = true;
 	}
 
-	bool all_parent = false;
-	if (!child_groups) {
-		std::set<Node *> parent_group;
-		bool parent_group_init = true;
-		first = true;
-		for (Node *p = this; first || p != this; p = p->group, first = false) {
-			if (p->sibling_dupe || p->parent_dupe) continue;
-			all_parent = false;
-			if (!p->parent) break;
-			if (!p->parent->group) break;
-			if (p->vnode) break;
-			if (p->parent->slave) break;
-			if (parent_group_init) {
-				bool first2 = true;
-				for (Node *p2 = p->parent; first2 || p2 != p->parent;
-				     p2 = p2->group, first2 = false) {
-					parent_group.insert(p2);
-				}
-				parent_group_init = false;
-			} else {
-				if (parent_group.find(p->parent) == parent_group.end()) break;
-				all_parent = true;
-			}
+	if (child_groups ||
+	    (group_count > parent_dupe_count + 1 && !is_child_group())) {
+		if (dest) {
+			dest[idx].group = this;
+			dest[idx].group_size = get_group_size();
 		}
+		++idx;
 	}
 
-	if (!all_parent) {
-		bool have_master_size = false;
-		unsigned long long total_size = 0;
-		unsigned long long master_size = 0;
-		first = true;
-		for (Node *p = this; first || p != this; p = p->group, first = false) {
-			if (!p->parent_dupe) {
-				total_size += p->size;
-			}
-			if (!p->slave) {
-				if (have_master_size) {
-					if (p->size < master_size) {
-						master_size = p->size;
-					}
-				} else {
-					master_size = p->size;
-					have_master_size = true;
-				}
-			}
-		}
-		group_list->insert(std::pair<unsigned long long, Node *>(total_size - master_size, this));
-	}
+	return idx;
 }
 
 bool Node::group_sort_less(const Node *a, const Node *b)

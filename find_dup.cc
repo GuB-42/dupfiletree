@@ -1,8 +1,8 @@
 #include <string>
 #include <map>
 #include <iostream>
-#include <fstream>
 #include <sstream>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -67,16 +67,16 @@ struct HashElt : public HashPoolAlloc {
 	Node *node;
 	unsigned char hash[HASH_SIZE];
 
-	HashElt(Node *n, std::string md5_str) : node(n) {
+	HashElt(Node *n, const char *md5_str) : node(n) {
 		set_hash(md5_str);
 		node->group = node;
 	}
 
-	void set_hash(std::string md5_str) {
+	void set_hash(const char *md5_str) {
 		unsigned hash_idx = 0;
 		bool high = true;
 		memset(hash, 0, HASH_SIZE);
-		for (unsigned i = 0; i < md5_str.size(); ++i) {
+		for (unsigned i = 0; md5_str[i] != '\0'; ++i) {
 			unsigned char v;
 			if (md5_str[i] >= '0' && md5_str[i] <= '9') {
 				v = md5_str[i] - '0';
@@ -137,53 +137,115 @@ static std::string to_human_str(unsigned long long v)
 	return "?";
 }
 
-void read_file(Node *root_node, std::istream *infile, const char *filename)
+void read_line(Node *root_node, char *line,
+               const char *filename, size_t line_nb)
 {
-	size_t line_nb = 1;
-	for (std::string line; std::getline(*infile, line); ) {
-		try {
-			std::string f_md5, f_size, f_path;
-			size_t pos = 0;
-			size_t pos2 = 0;
+	char *p = line;
 
-			for (size_t j = 0; j < option_format.length(); ++j) {
-				pos = line.find_first_not_of(' ', pos2);
-				if (pos == std::string::npos) throw "parse error";
-				pos2 = line.find_first_of(' ', pos);
-				if (pos2 == std::string::npos) throw "parse error";
-				switch (option_format[j]) {
-				case '5':
-					f_md5 = line.substr(pos, pos2 - pos);
-					break;
-				case 's':
-					f_size = line.substr(pos, pos2 - pos);
-					break;
-				}
+	while (*p == ' ' || *p == '\t') ++p;
+	if (*p == '\0') return;
+
+	try {
+		char *b_md5 = NULL;
+		char *b_size = NULL;
+		char *b_path = NULL;
+
+		for (size_t j = 0; j < option_format.length(); ++j) {
+			if (*p == '\0') throw "parse error";
+			char *p2 = p;
+			while (*p2 != ' ' && *p2 != '\t' && *p2 != '\0') ++p2;
+			if (*p2 == '\0') throw "parse error";
+			*p2 = '\0';
+			switch (option_format[j]) {
+			case '5':
+				b_md5 = p;
+				break;
+			case 's':
+				b_size = p;
+				break;
 			}
-			pos = line.find_first_not_of(' ', pos2);
-			if (pos == std::string::npos) throw "parse error";
-			f_path = line.substr(pos);
+			p = p2 + 1;
+			while (*p == ' ' || *p == '\t') ++p;
+		}
+		b_path = p;
 
-			unsigned long long size = 0;
-			if (f_size.find_first_not_of("0123456789") == std::string::npos) {
-				size = strtoull(f_size.c_str(), NULL, 10);
-			}
+		unsigned long long size = 0;
+		if (b_size) {
+			size = strtoull(b_size, &p, 10);
+			if (*p != '\0') size = 0;
+		}
 
-			if (option_zero ||
-			    size != 0 || f_md5 != "d41d8cd98f00b204e9800998ecf8427e") {
-				Node *node = root_node->insert_node(f_path.c_str(), size);
-
-				if (!node->group && f_md5.length() == 32 &&
-				    f_md5.find_first_not_of("0123456789abcdef") == std::string::npos) {
-					HashElt hash_elt(node, f_md5);
+		if (option_zero || size != 0 ||
+		    (b_md5 && strcmp(b_md5, "d41d8cd98f00b204e9800998ecf8427e") != 0)) {
+			Node *node = root_node->insert_node(b_path, size);
+			if (b_md5 && !node->group) {
+				p = b_md5;
+				while ((*p >= '0' && *p <= '9') ||
+				       (*p >= 'a' && *p <= 'f') ||
+				       (*p >= 'A' && *p <= 'F')) ++p;
+				if (*p == '\0' && p - b_md5 == 32) {
+					HashElt hash_elt(node, b_md5);
 					hash_skip_list.insert(hash_elt);
 				}
 			}
-		} catch (const char *s) {
-			std::cout << filename << ":" << line_nb << ": " << s << std::endl;
 		}
-		++line_nb;
+	} catch (const char *s) {
+		std::cout << filename << ":" << line_nb << ": " << s << std::endl;
 	}
+}
+
+void read_file(Node *root_node, FILE *stream, const char *filename)
+{
+	size_t line_nb = 1;
+	size_t read_buf_size = 65536;
+	char *read_buf = (char *)malloc(read_buf_size);
+	char *read_p = read_buf;
+	char *next_p = read_p;
+
+	do {
+		size_t sz = fread(next_p, 1, read_buf_size - (next_p - read_buf) - 1, stream);
+		while (sz > 0) {
+			while (sz > 0 && *next_p != '\n' && *next_p != '\r') {
+				--sz;
+				++next_p;
+			}
+			if (sz > 0) {
+				size_t next_line_nb = line_nb;
+				if (*next_p == '\n') ++next_line_nb;
+				*next_p = '\0';
+				read_line(root_node, read_p, filename, line_nb);
+				read_p = next_p + 1;
+				line_nb = next_line_nb;
+			}
+		}
+		if (next_p >= read_buf + read_buf_size - 1) {
+			if (read_p != read_buf) {
+				memmove(read_buf, read_p, read_buf_size - (read_p - read_buf));
+				next_p -= read_p - read_buf;
+				read_p = read_buf;
+			} else {
+				read_buf_size *= 2;
+				char *new_read_buf = (char *)realloc(read_buf, read_buf_size);
+				next_p = new_read_buf + (next_p - read_buf);
+				read_p = read_buf = new_read_buf;
+			}
+		}
+	} while (!feof(stream) && !ferror(stream));
+
+	*next_p = '\0';
+	read_line(root_node, read_p, filename, line_nb);
+
+	free(read_buf);
+}
+
+int group_list_cmp(const void *a, const void *b)
+{
+	const Node::GroupListElt *elt_a = (Node::GroupListElt *)a;
+	const Node::GroupListElt *elt_b = (Node::GroupListElt *)b;
+
+	if (elt_a->group_size < elt_b->group_size) return 1;
+	if (elt_b->group_size < elt_a->group_size) return -1;
+	return 0;
 }
 
 int main(int argc, char* argv[])
@@ -222,18 +284,17 @@ int main(int argc, char* argv[])
 
 	Node *root_node = new Node(".", 1, false);
 
-	std::multimap<unsigned long long, Node *> group_list;
-
 	std::cout << "building tree / " << get_current_time() << std::endl;
 	if (argc > 1) {
 		for (int i = 1; i < argc; ++i) {
-			std::ifstream infile;
-			infile.open(argv[i]);
-			read_file(root_node, &infile, argv[i]);
-			infile.close();
+			FILE *f = fopen(argv[i], "r");
+			if (f) {
+				read_file(root_node, f, argv[i]);
+				fclose(f);
+			}
 		}
 	} else {
-		read_file(root_node, &std::cin, "stdin");
+		read_file(root_node, stdin, "stdin");
 	}
 	hash_skip_list.clear();
 
@@ -262,32 +323,41 @@ int main(int argc, char* argv[])
 	}
 
 	if (option_print_tree) root_node->print_tree();
-	std::cout << "building groups / " << get_current_time() << std::endl;
-	root_node->build_group_list(&group_list, option_child_groups);
-	std::cout << "done: " << group_list.size() << " groups / " << get_current_time() << std::endl;
+
+	Node::GroupListElt *group_list = NULL;
+	std::cout << "counting groups / " << get_current_time() << std::endl;
 	root_node->set_visited(false);
-	for (std::multimap<unsigned long long, Node *>::const_reverse_iterator it =
-	     group_list.rbegin(); it != group_list.rend(); ++it) {
-//	for (std::multimap<unsigned long long, Node *>::const_iterator it =
-//		 group_list.begin(); it != group_list.end(); ++it) {
+	size_t group_list_count = root_node->build_count_group_list(NULL, option_child_groups);
+	std::cout << "alloc " << group_list_count << " groups / " << get_current_time() << std::endl;
+	group_list = new Node::GroupListElt[group_list_count];
+	std::cout << "building groups / " << get_current_time() << std::endl;
+	root_node->set_visited(false);
+	root_node->build_count_group_list(group_list, option_child_groups);
+	std::cout << "sorting groups / " << get_current_time() << std::endl;
+	qsort(group_list, group_list_count, sizeof (*group_list), group_list_cmp);
+	std::cout << "done / " << get_current_time() << std::endl;
+	root_node->set_visited(false);
+	for (size_t i = 0; i < group_list_count; ++i) {
+		const Node::GroupListElt &ge = group_list[i];
 		bool visited = false;
 		if (!option_child_groups) {
 			visited = true;
 			bool first = true;
-			for (Node *p = it->second; first || p != it->second; p = p->group, first = false) {
+			for (Node *p = ge.group; first || p != ge.group; p = p->group, first = false) {
 				if (!p->visited) visited = false;
 			}
 		}
 		if (!visited) {
-			std::cout << "group size : " << (visited ? "(VISITED) " : "") << it->first <<
-				" (" << to_human_str(it->first) <<  ")" << std::endl;
-			it->second->print_group();
+			std::cout << "group size : " << (visited ? "(VISITED) " : "") << ge.group_size <<
+				" (" << to_human_str(ge.group_size) <<  ")" << std::endl;
+			ge.group->print_group();
 			bool first = true;
-			for (Node *p = it->second; first || p != it->second; p = p->group, first = false) {
-				if (true || !p->slave) p->set_visited(true);
+			for (Node *p = ge.group; first || p != ge.group; p = p->group, first = false) {
+				if (!p->slave) p->set_visited(true);
 			}
 		}
 	}
+	delete[] group_list;
 
 	if (!option_only_in.empty()) {
 		Node *origin = root_node->find_node(option_only_in.c_str());
@@ -296,9 +366,12 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	group_list.clear();
 	root_node->clear_children();
 	delete root_node;
 
-	std::cout << "total_alloc : " << total_alloc << " " << get_current_time() << std::endl;
+	std::cout << "total_alloc : " << total_alloc <<
+		" (" << to_human_str(total_alloc) <<
+		") / " << (group_list_count * sizeof (*group_list)) <<
+		" (" << to_human_str(group_list_count * sizeof (*group_list)) << ") / " <<
+		get_current_time() << std::endl;
 }

@@ -17,7 +17,7 @@ Node::Node(const char *n, size_t n_size, bool vnode) :
 	sibling(NULL), group(NULL), child_count(0),
 	sibling_dupe(false), parent_dupe(false),
 	slave(false), visited(false), vnode(vnode),
-	last_child(false)
+	last_child(false), keep(false)
 {
 	name = string_pool.alloc(n_size + 1);
 	memcpy(name, n, n_size);
@@ -128,6 +128,32 @@ Node *Node::insert_node(const char *path, unsigned long long size)
 	return cur_node;
 }
 
+void Node::resize_vnodes(unsigned long long vnode_size,
+                         unsigned long long file_size)
+{
+	if (size == vnode_size) {
+		size = file_size;
+	} else if (vnode_size > file_size) {
+		unsigned long long ratio = vnode_size / file_size;
+		size /= ratio;
+	}
+
+	Node *last_p = NULL;
+	for (Node *p = child; p; p = p->sibling) {
+		if (last_p) {
+			if (!last_p->vnode && p->vnode &&
+			    strcmp(last_p->name, p->name) == 0) {
+				p->resize_vnodes(p->size, last_p->size);
+			} else {
+				p->resize_vnodes(vnode_size, file_size);
+			}
+		} else {
+			p->resize_vnodes(vnode_size, file_size);
+		}
+		last_p = p;
+	}
+}
+
 Node *Node::find_node(const char *path)
 {
 	Node *cur_node = this;
@@ -169,9 +195,10 @@ std::string Node::get_path() const
 {
 	std::string res;
 
-	for (const Node *p = this; p && p->parent; p = p->parent) {
+	bool first = true;
+	for (const Node *p = this; p && p->parent; p = p->parent, first = false) {
 		std::string n = p->name + p->get_flag_str();
-		res = res.empty() ? n : n + '/' + res;
+		res = first ? n : n + '/' + res;
 	}
 	return res;
 }
@@ -579,21 +606,21 @@ size_t Node::build_count_group_list(GroupListElt *dest, bool child_groups)
 	return idx;
 }
 
-bool Node::group_sort_less(const Node *a, const Node *b)
+static int compare_nodes(const Node *a, const Node *b)
 {
-	if (!a->slave && b->slave) return true;
-	if (a->slave && !b->slave) return false;
-	if (b->size < a->size) return true;
-	if (a->size < b->size) return false;
+	if (!a->slave && b->slave) return -1;
+	if (a->slave && !b->slave) return 1;
+	if (b->size < a->size) return -1;
+	if (a->size < b->size) return 1;
 
 	unsigned depth_a = 0;
 	for (const Node *p = a; p; p = p->parent) {
-		if (b == p) return false;
+		if (b == p) return 1;
 		++depth_a;
 	}
 	unsigned depth_b = 0;
 	for (const Node *p = b; p; p = p->parent) {
-		if (a == p) return true;
+		if (a == p) return -1;
 		++depth_b;
 	}
 
@@ -610,17 +637,22 @@ bool Node::group_sort_less(const Node *a, const Node *b)
 	while (pa->parent) {
 		if (pa->parent == pb->parent) {
 			int cmp_res = strcmp(pa->name, pb->name);
-			if (cmp_res < 0) return true;
-			if (cmp_res > 0) return false;
-			if (!pa->vnode && pb->vnode) return true;
-			if (pa->vnode && !pb->vnode) return false;
-			return true; // out of options
+			if (cmp_res < 0) return -1;
+			if (cmp_res > 0) return 1;
+			if (!pa->vnode && pb->vnode) return -1;
+			if (pa->vnode && !pb->vnode) return 1;
+			return 0; // out of options
 		}
 		pa = pa->parent;
 		pb = pb->parent;
 	}
 
-	return true;
+	return 0;
+}
+
+bool Node::group_sort_less(const Node *a, const Node *b)
+{
+	return (compare_nodes(a, b) < 0);
 }
 
 void Node::print_group() const
@@ -651,4 +683,108 @@ void Node::clear_children()
 		child = t->sibling;
 		delete t;
 	}
+}
+
+static int compare_keep_nodes(const Node *a, const Node *b)
+{
+	bool a_keep = false;
+	unsigned a_keep_depth = 0;
+	for (const Node *p = a; p; p = p->parent) {
+		if (p->keep) {
+			a_keep = true;
+			break;
+		}
+		++a_keep_depth;
+	}
+	bool b_keep = false;
+	unsigned b_keep_depth = 0;
+	for (const Node *p = b; p; p = p->parent) {
+		if (p->keep) {
+			b_keep = true;
+			break;
+		}
+		++b_keep_depth;
+	}
+	if (a_keep && !b_keep) return -1;
+	if (!a_keep && b_keep) return 1;
+	if (a->size < b->size) return -1;
+	if (b->size < a->size) return 1;
+	if (a_keep && b_keep) {
+		if (a_keep_depth < b_keep_depth) return -1;
+		if (b_keep_depth < a_keep_depth) return 1;
+	}
+
+	return compare_nodes(a, b);
+}
+
+void Node::find_keepers()
+{
+	if (!group) {
+		visited = true;
+		keep = true;
+		for (Node *p = this; p; p = p->parent) {
+			if (p->vnode) {
+				keep = false;
+				break;
+			}
+		}
+	} else if (!visited) {
+		bool vnode_group = false;
+
+		bool first = true;
+		for (Node *p = this; first || p != this; p = p->group, first = false) {
+			p->visited = true;
+			if (!p->slave) {
+				for (Node *p2 = p; p2; p2 = p2->parent) {
+					if (p2->vnode) {
+						vnode_group = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (!vnode_group) {
+			Node *keeper = NULL;
+
+			first = true;
+			for (Node *p = this; first || p != this; p = p->group, first = false) {
+				if (!p->slave) {
+					if (!keeper || compare_keep_nodes(p, keeper) < 0) keeper = p;
+				}
+			}
+
+			first = true;
+			for (Node *p = this; first || p != this; p = p->group, first = false) {
+				for (Node *p2 = p; p2; p2 = p2->parent) {
+					if (p2 == keeper) {
+						for (Node *p3 = p; p3; p3 = p3->parent) {
+							p3->keep = true;
+						}
+					}
+					if (!p2->parent_dupe) break;
+				}
+				p->visited = true;
+			}
+		}
+	}
+
+	for (Node *p = child; p; p = p->sibling) {
+		p->find_keepers();
+	}
+}
+
+size_t Node::count_list_delete(Node **dest)
+{
+	size_t ret = 0;
+
+	if (keep) {
+		for (Node *p = child; p; p = p->sibling) {
+			ret += p->count_list_delete(dest ? dest + ret : NULL);
+		}
+	} else if (!vnode) {
+		if (dest) *dest = this;
+		ret = 1;
+	}
+	return ret;
 }

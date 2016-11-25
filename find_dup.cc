@@ -248,6 +248,16 @@ int group_list_cmp(const void *a, const void *b)
 	return 0;
 }
 
+int delete_list_cmp(const void *a, const void *b)
+{
+	const Node * const *elt_a = static_cast<const Node * const *>(a);
+	const Node * const *elt_b = static_cast<const Node * const *>(b);
+
+	if ((*elt_a)->size < (*elt_b)->size) return 1;
+	if ((*elt_b)->size < (*elt_a)->size) return -1;
+	return 0;
+}
+
 int main(int argc, char* argv[])
 {
 	int opt;
@@ -300,6 +310,8 @@ int main(int argc, char* argv[])
 
 	std::cout << "breaking cycles / " << get_current_time() << std::endl;
 	root_node->break_sibling_cycles();
+	std::cout << "resizing vnodes / " << get_current_time() << std::endl;
+	root_node->resize_vnodes();
 	std::cout << "ungrouping directories / " << get_current_time() << std::endl;
 	root_node->ungroup_dirs();
 	std::cout << "finding dupes / " << get_current_time() << std::endl;
@@ -359,6 +371,31 @@ int main(int argc, char* argv[])
 	}
 	delete[] group_list;
 
+	std::cout << "finding keepers / " << get_current_time() << std::endl;
+	root_node->set_visited(false);
+	root_node->find_keepers();
+	std::cout << "counting deletes / " << get_current_time() << std::endl;
+	size_t delete_list_count = root_node->count_list_delete(NULL);
+	std::cout << "alloc " << delete_list_count << " deletes / " << get_current_time() << std::endl;
+	Node **delete_list = new Node *[delete_list_count];
+	std::cout << "building deletes / " << get_current_time() << std::endl;
+	root_node->count_list_delete(delete_list);
+	std::cout << "sorting deletes / " << get_current_time() << std::endl;
+	qsort(delete_list, delete_list_count, sizeof (*delete_list), delete_list_cmp);
+	std::cout << "done / " << get_current_time() << std::endl;
+	unsigned long long prev_size = 0;
+	for (size_t i = 0; i < delete_list_count; ++i) {
+		if (i == 0 || delete_list[i]->size != prev_size) {
+			if (i != 0) std::cout << std::endl;
+			std::cout << "delete size : " << delete_list[i]->size <<
+				" (" << to_human_str(delete_list[i]->size) << ")" << std::endl;
+			prev_size = delete_list[i]->size;
+		}
+		std::cout << delete_list[i]->get_path() << std::endl;
+	}
+	if (delete_list_count != 0) std::cout << std::endl;
+	delete[] delete_list;
+
 	if (!option_only_in.empty()) {
 		Node *origin = root_node->find_node(option_only_in.c_str());
 		if (origin) {
@@ -372,6 +409,8 @@ int main(int argc, char* argv[])
 	std::cout << "total_alloc : " << total_alloc <<
 		" (" << to_human_str(total_alloc) <<
 		") / " << (group_list_count * sizeof (*group_list)) <<
+		" (" << to_human_str(group_list_count * sizeof (*group_list)) <<
+		") / " << (delete_list_count * sizeof (*delete_list)) <<
 		" (" << to_human_str(group_list_count * sizeof (*group_list)) << ") / " <<
 		get_current_time() << std::endl;
 }

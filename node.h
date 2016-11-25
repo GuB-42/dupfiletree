@@ -38,8 +38,11 @@ struct Node : public NodePoolAlloc {
 	bool                visited:1;
 	bool                vnode:1;
 	bool                last_child:1;
+	bool                keep:1;
 
 	Node *insert_node(const char *path, unsigned long long size);
+	void resize_vnodes(unsigned long long vnode_size = 0,
+                       unsigned long long file_size = 0);
 	Node *find_node(const char *path);
 	std::string get_flag_str() const;
 	std::string get_path() const;
@@ -60,6 +63,8 @@ struct Node : public NodePoolAlloc {
 	size_t build_count_group_list(GroupListElt *dest, bool child_groups);
 	void print_group() const;
 	void clear_children();
+	void find_keepers();
+	size_t count_list_delete(Node **dest);
 private:
 	static bool group_sort_less(const Node *a, const Node *b);
 

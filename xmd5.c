@@ -298,10 +298,7 @@ int sort_str(const void *a, const void *b)
 int do_xmd5_dir(const char *filename, const char *escaped_filename)
 {
 	DIR *dir;
-	long pathlen;
-	size_t dir_entry_len;
 	size_t filename_len = strlen(filename);
-	struct dirent *dir_entry_buf = NULL;
 	struct dirent *dir_entry;
 	char **flist = NULL;
 	char **flist_p = NULL;
@@ -309,11 +306,10 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 	char **p;
 
 	if (!(dir = opendir(filename))) goto bad_dir_errno;
-	if ((pathlen = pathconf(filename, _PC_NAME_MAX)) == -1) goto bad_dir2_pathconv;
-	dir_entry_len = offsetof(struct dirent, d_name) + pathlen + 1;
-	if (!(dir_entry_buf = (struct dirent *)malloc(dir_entry_len))) goto bad_dir2_errno;
 	while (1) {
-		if ((errno = readdir_r(dir, dir_entry_buf, &dir_entry)) != 0) goto bad_dir2_errno;
+		errno = 0;
+		dir_entry = readdir(dir);
+		if (errno) goto bad_dir2_errno;
 		if (!dir_entry) break;
 		if (strcmp(dir_entry->d_name, ".") != 0 &&
 		    strcmp(dir_entry->d_name, "..") != 0) {
@@ -335,7 +331,6 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 			++flist_p;
 		}
 	}
-	free(dir_entry_buf);
 	if (closedir(dir) != 0) goto bad_dir_errno;
 
 	qsort(flist, flist_p - flist, sizeof (char **), sort_str);
@@ -346,9 +341,6 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 	free(flist);
 
 	return 0;
-bad_dir2_pathconv:
-	print_error_line("bad dir", "pathconf", escaped_filename);
-	goto dir_error2;
 bad_dir2_errno:
 	print_error_line("bad dir", strerror(errno), escaped_filename);
 	goto dir_error2;
@@ -358,7 +350,6 @@ bad_dir_errno:
 dir_error2:
 	for (p = flist; p < flist_p; ++p) free(*p);
 	free(flist);
-	free(dir_entry_buf);
 	closedir(dir);
 dir_error:
 	return -1;

@@ -33,10 +33,10 @@ public:
 	class iterator {
 		friend class const_iterator;
 	public:
-        iterator() : ptr(NULL) { }
-        explicit iterator(SkipListElt *p) : ptr(p) { }
-        bool operator==(const iterator &o) const { return ptr == o.ptr; };
-        bool operator!=(const iterator &o) const { return ptr != o.ptr; };
+		iterator() : ptr(NULL) { }
+		explicit iterator(SkipListElt *p) : ptr(p) { }
+		bool operator==(const iterator &o) const { return ptr == o.ptr; };
+		bool operator!=(const iterator &o) const { return ptr != o.ptr; };
 		iterator &operator++() {
 			ptr = ptr->next[0];
 			return *this;
@@ -48,11 +48,11 @@ public:
 	};
 	class const_iterator {
 	public:
-        const_iterator() : ptr(NULL) { }
-        const_iterator(const iterator &o) : ptr(o.ptr) { }
-        explicit const_iterator(const SkipListElt *p) : ptr(p) { }
-        bool operator==(const const_iterator &o) const { return ptr == o.ptr; };
-        bool operator!=(const const_iterator &o) const { return ptr != o.ptr; };
+		const_iterator() : ptr(NULL) { }
+		const_iterator(const iterator &o) : ptr(o.ptr) { }
+		explicit const_iterator(const SkipListElt *p) : ptr(p) { }
+		bool operator==(const const_iterator &o) const { return ptr == o.ptr; };
+		bool operator!=(const const_iterator &o) const { return ptr != o.ptr; };
 		const_iterator &operator++() {
 			ptr = ptr->next[0];
 			return *this;

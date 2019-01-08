@@ -42,7 +42,7 @@ struct Node : public NodePoolAlloc {
 
 	Node *insert_node(const char *path, unsigned long long size);
 	void resize_vnodes(unsigned long long vnode_size = 0,
-                       unsigned long long file_size = 0);
+	                   unsigned long long file_size = 0);
 	Node *find_node(const char *path);
 	std::string get_flag_str() const;
 	std::string get_path() const;

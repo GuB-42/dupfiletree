@@ -111,7 +111,7 @@ void print_error_line(const char *error, const char *error2, const char *escaped
 	for (i = 0; i < sizeof (xerror) - 3; ++i) {
 		while (p &&
 		       !(*p >= 'A' && *p <= 'Z') &&
-			   !(*p >= 'a' && *p <= 'z')) {
+		       !(*p >= 'a' && *p <= 'z')) {
 			p = *p == '\0' ? *++pstr : p + 1;
 		}
 		if (p && *p >= 'A' && *p <= 'Z') {
@@ -244,7 +244,7 @@ int do_xmd5_file(const char *filename,
 	int j;
 
 	f = fopen(filename, "rb");
-	if (!f)	goto bad_file_errno;
+	if (!f) goto bad_file_errno;
 	if (MD5_Init(&c) != 1) goto bad_file2_md5;
 	if (!(buf = malloc(BLOCK_SIZE))) goto bad_file2_errno;
 	while ((rsize = fread(buf, 1, BLOCK_SIZE, f))) {

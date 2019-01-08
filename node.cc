@@ -134,8 +134,8 @@ void Node::resize_vnodes(unsigned long long vnode_size,
 	if (size == vnode_size) {
 		size = file_size;
 	} else if (vnode_size > file_size) {
-		unsigned long long ratio = vnode_size / file_size;
-		size /= ratio;
+		unsigned long long ratio = (vnode_size << 8) / file_size;
+		size = (size << 8) / ratio;
 	}
 
 	Node *last_p = NULL;

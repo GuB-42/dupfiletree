@@ -411,6 +411,6 @@ int main(int argc, char* argv[])
 		") / " << (group_list_count * sizeof (*group_list)) <<
 		" (" << to_human_str(group_list_count * sizeof (*group_list)) <<
 		") / " << (delete_list_count * sizeof (*delete_list)) <<
-		" (" << to_human_str(group_list_count * sizeof (*group_list)) << ") / " <<
+		" (" << to_human_str(delete_list_count * sizeof (*delete_list)) << ") / " <<
 		get_current_time() << std::endl;
 }

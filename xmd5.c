@@ -16,6 +16,7 @@
 /* #define NO_ARCHIVES */
 #define BLOCK_SIZE 10240
 #define UNKNOWN_SIZE 0xFFFFFFFFFFFFFFFFull
+#define RETRY_ARCHIVE_COUNT 10
 
 #ifdef DO_MTRACE
 #include <mcheck.h>
@@ -39,6 +40,7 @@ const char *get_escape_pt(const char *filename_pt, const char **prepl)
 			return pt;
 		} else if (*pt == '%') {
 			if ((pt[1] == '%' && pt[2] == '%' && pt[3] == '%') ||
+			    (pt[1] == '#' && pt[2] == '0' && pt[3] == ';') ||
 			    (pt[1] == 'l' && pt[2] == 'f' && pt[3] == ';') ||
 			    (pt[1] == 'c' && pt[2] == 'r' && pt[3] == ';') ||
 			    (pt[1] == 'p' && pt[2] == 'c' && pt[3] == ';')) {
@@ -95,9 +97,9 @@ char *escape_filename(const char *filename)
 	return output;
 }
 
-void print_error_line(const char *error, const char *error2, const char *escaped_filename)
+void set_xerror(char *xerror, size_t xerror_size,
+                const char *error, const char *error2)
 {
-	char xerror[MD5_DIGEST_LENGTH * 2 + 1];
 	unsigned i;
 	const char *errors[3];
 	const char **pstr;
@@ -108,7 +110,7 @@ void print_error_line(const char *error, const char *error2, const char *escaped
 	errors[2] = NULL;
 	pstr = errors;
 	p = *pstr;
-	for (i = 0; i < sizeof (xerror) - 3; ++i) {
+	for (i = 0; i < xerror_size - 3; ++i) {
 		while (p &&
 		       !(*p >= 'A' && *p <= 'Z') &&
 		       !(*p >= 'a' && *p <= 'z')) {
@@ -122,10 +124,16 @@ void print_error_line(const char *error, const char *error2, const char *escaped
 			xerror[i] = 'X';
 		}
 	}
-	xerror[sizeof (xerror) - 3] = 'X';
-	xerror[sizeof (xerror) - 2] = 'X';
-	xerror[sizeof (xerror) - 1] = '\0';
+	xerror[xerror_size - 3] = 'X';
+	xerror[xerror_size - 2] = 'X';
+	xerror[xerror_size - 1] = '\0';
+}
 
+void print_error_line(const char *error, const char *error2, const char *escaped_filename)
+{
+	char xerror[MD5_DIGEST_LENGTH * 2 + 1];
+
+	set_xerror(xerror, sizeof(xerror), error, error2);
 	printf("%s                X %s\n", xerror, escaped_filename);
 }
 
@@ -154,34 +162,59 @@ int do_xmd5_archive(const char *filename, const char *escaped_filename)
 	struct archive *a;
 	struct archive_entry *entry;
 	void *buf = NULL;
-	int rh_ret;
+	int rh_ret, open_ret;
+	int retry, j;
+	unsigned long long name_error_counter = 0;
 
 	if (!(a = archive_read_new())) goto bad_archive;
 	archive_read_support_filter_all(a);
 	archive_read_support_format_all(a);
-	if (archive_read_open_filename(a, filename, BLOCK_SIZE) != ARCHIVE_OK) {
-		goto bad_archive2;
+	for (retry = 0; retry <= RETRY_ARCHIVE_COUNT; ++retry) {
+		open_ret = archive_read_open_filename(a, filename, BLOCK_SIZE);
+		if (open_ret != ARCHIVE_RETRY) break;
 	}
+	if (open_ret != ARCHIVE_OK && open_ret != ARCHIVE_WARN) goto bad_archive2;
 	if (!(buf = malloc(BLOCK_SIZE))) goto bad_archive2;
-	while ((rh_ret = archive_read_next_header(a, &entry)) == ARCHIVE_OK) {
-		int j;
+	for (;;) {
 		MD5_CTX c;
 		unsigned long long fsize = 0;
 		unsigned char md5_out[MD5_DIGEST_LENGTH];
+		const char *entry_pathname;
+		char *escaped_entry_pathname;
+		char xerror[MD5_DIGEST_LENGTH * 2 + 1];
+		int md5_error = 0;
 
+		for (retry = 0; retry <= RETRY_ARCHIVE_COUNT; ++retry) {
+			rh_ret = archive_read_next_header(a, &entry);
+			if (rh_ret != ARCHIVE_RETRY) break;
+		}
+		if (rh_ret == ARCHIVE_FATAL) goto bad_archive2;
+		if (rh_ret != ARCHIVE_OK && rh_ret != ARCHIVE_WARN) break;
 		fsize = 0;
 		if (MD5_Init(&c) != 1) goto bad_archive2;
 		while (1) {
-			int size = archive_read_data(a, buf, BLOCK_SIZE);
+			int size;
+			for (retry = 0; retry <= RETRY_ARCHIVE_COUNT; ++retry) {
+				size = archive_read_data(a, buf, BLOCK_SIZE);
+				if (size != ARCHIVE_RETRY) break;
+			}
 			if (size < 0) {
-				MD5_Final(md5_out, &c);
-				goto bad_archive2;
+				if (size == ARCHIVE_FATAL) {
+					MD5_Final(md5_out, &c);
+					goto bad_archive2;
+				}
+				md5_error = 1;
+				set_xerror(xerror, sizeof(xerror),
+				           "bad afile", archive_error_string(a));
+				break;
 			} else if (size == 0) {
 				break;
 			} else {
 				if (MD5_Update(&c, buf, size) != 1) {
-					MD5_Final(md5_out, &c);
-					goto bad_archive2;
+					md5_error = 1;
+					set_xerror(xerror, sizeof(xerror),
+					           "bad afile", archive_error_string(a));
+					break;
 				}
 				fsize += size;
 			}
@@ -196,17 +229,38 @@ int do_xmd5_archive(const char *filename, const char *escaped_filename)
 			flist_p = t + (flist_p - flist);
 			flist = t;
 		}
+		entry_pathname = archive_entry_pathname(entry);
+		if (!entry_pathname) {
+			++name_error_counter;
+			escaped_entry_pathname = malloc(256);
+			if (escaped_entry_pathname) {
+				sprintf(escaped_entry_pathname, "%%#0;BAD_NAME_%llu", name_error_counter);
+			} else {
+				entry_pathname = "%#0;";
+				escaped_entry_pathname = (char *)entry_pathname;
+			}
+		} else {
+			escaped_entry_pathname = escape_filename(entry_pathname);
+		}
 		*flist_p = (char *)
 			malloc(MD5_DIGEST_LENGTH * 2 + 2 +
-			       33 + strlen(archive_entry_pathname(entry)) +
+			       33 + strlen(escaped_entry_pathname) +
 			       5 + strlen(escaped_filename) + 1);
 		if (!*flist_p) goto bad_archive2;
-		for (j = 0; j < MD5_DIGEST_LENGTH; ++j) {
-			sprintf(*flist_p + 2 * j, "%02x", md5_out[j]);
+		if (md5_error) {
+			sprintf(*flist_p, "%s  %15llu %s%%%%%%%%/%s",
+			        xerror, 0ull, escaped_filename, escaped_entry_pathname);
+		} else {
+			for (j = 0; j < MD5_DIGEST_LENGTH; ++j) {
+				sprintf(*flist_p + 2 * j, "%02x", md5_out[j]);
+			}
+			sprintf(*flist_p + 2 * MD5_DIGEST_LENGTH, "  %15llu %s%%%%%%%%/%s",
+			        fsize, escaped_filename, escaped_entry_pathname);
 		}
-		sprintf(*flist_p + 2 * MD5_DIGEST_LENGTH, "  %15llu %s%%%%%%%%/%s",
-		        fsize, escaped_filename, archive_entry_pathname(entry));
 		++flist_p;
+		if (entry_pathname != escaped_entry_pathname) {
+			free(escaped_entry_pathname);
+		}
 	}
 	free(buf);
 	buf = NULL;
@@ -214,12 +268,14 @@ int do_xmd5_archive(const char *filename, const char *escaped_filename)
 	if (rh_ret != ARCHIVE_EOF) goto bad_archive2;
 	if (archive_read_free(a) != ARCHIVE_OK) goto bad_archive;
 
-	qsort(flist, flist_p - flist, sizeof (char **), sort_str_with_xmd5);
-	for (p = flist; p < flist_p; ++p) {
-		printf("%s\n", *p);
-		free(*p);
+	if (flist) {
+		qsort(flist, flist_p - flist, sizeof (char **), sort_str_with_xmd5);
+		for (p = flist; p < flist_p; ++p) {
+			printf("%s\n", *p);
+			free(*p);
+		}
+		free(flist);
 	}
-	free(flist);
 
 	return 0;
 bad_archive2:
@@ -333,12 +389,14 @@ int do_xmd5_dir(const char *filename, const char *escaped_filename)
 	}
 	if (closedir(dir) != 0) goto bad_dir_errno;
 
-	qsort(flist, flist_p - flist, sizeof (char **), sort_str);
-	for (p = flist; p < flist_p; ++p) {
-		do_xmd5(*p);
-		free(*p);
+	if (flist) {
+		qsort(flist, flist_p - flist, sizeof (char **), sort_str);
+		for (p = flist; p < flist_p; ++p) {
+			do_xmd5(*p);
+			free(*p);
+		}
+		free(flist);
 	}
-	free(flist);
 
 	return 0;
 bad_dir2_errno:
@@ -349,9 +407,9 @@ bad_dir_errno:
 	goto dir_error;
 dir_error2:
 	for (p = flist; p < flist_p; ++p) free(*p);
-	free(flist);
 	closedir(dir);
 dir_error:
+	free(flist);
 	return -1;
 }
 
